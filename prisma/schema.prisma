@@ -1,0 +1,132 @@
+// prisma/schema.prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  name          String
+  passwordHash  String
+  role          Role          @relation(fields: [roleId], references: [id])
+  roleId        String
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  // Relaciones
+  paymentRequests     PaymentRequest[] @relation("Requester")
+  approvalsTechnical  PaymentRequest[] @relation("TechnicalApprover")
+  approvalsFinancial  PaymentRequest[] @relation("FinancialApprover")
+  createdOrders       PurchaseOrder[]  @relation("Creator")
+}
+
+model Role {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  permissions Json      
+  users       User[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Provider {
+  id          String    @id @default(uuid())
+  name        String    // Solo este campo es obligatorio
+  ruc         String?   @unique  // Ahora es opcional pero sigue siendo único
+  address     String?
+  phone       String?
+  email       String?
+  status      String    @default("ACTIVE")
+  
+  // Nuevos campos para información adicional
+  contactInfo Json?     // Almacena información de contacto como JSON
+  bankInfo    Json?     // Almacena información bancaria como JSON
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relaciones
+  paymentRequests PaymentRequest[]
+  purchaseOrders  PurchaseOrder[]
+}
+
+model PaymentRequest {
+  id          String    @id @default(uuid())
+  number      String    @unique
+  type        String    // DIRECT, WITH_PO, PARTIAL
+  providerId  String
+  amount      Decimal
+  description String?
+  status      String    @default("PENDING")
+  
+  // Campos para el manejo de pagos
+  paymentType String    @default("contado")  // contado, diferido
+  paymentTerm String?   // 30, 60, 90 días
+  paymentDate DateTime?
+  
+  // Campos para aprobaciones
+  technicalApproverId String?
+  technicalApprovalDate DateTime?
+  financialApproverId String?
+  financialApprovalDate DateTime?
+  
+  // Campo para orden de compra opcional
+  purchaseOrderId String?
+  
+  // Campos de auditoría
+  requesterId  String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relaciones
+  provider    Provider  @relation(fields: [providerId], references: [id])
+  requester   User     @relation("Requester", fields: [requesterId], references: [id])
+  technicalApprover  User?    @relation("TechnicalApprover", fields: [technicalApproverId], references: [id])
+  financialApprover  User?    @relation("FinancialApprover", fields: [financialApproverId], references: [id])
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+
+  // Índices para optimizar búsquedas
+  @@index([providerId])
+  @@index([requesterId])
+  @@index([status])
+  @@index([type])
+}
+
+model PurchaseOrder {
+  id          String    @id @default(uuid())
+  number      String    @unique
+  providerId  String
+  totalAmount Decimal
+  status      String
+  description String?
+  
+  // Relaciones
+  provider    Provider  @relation(fields: [providerId], references: [id])
+  creator     User     @relation("Creator", fields: [creatorId], references: [id])
+  creatorId   String
+  paymentRequests PaymentRequest[]
+  items       PurchaseOrderItem[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model PurchaseOrderItem {
+  id          String    @id @default(uuid())
+  orderId     String
+  description String
+  quantity    Int
+  unitPrice   Decimal
+  total       Decimal
+  
+  // Relaciones
+  order       PurchaseOrder @relation(fields: [orderId], references: [id])
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
