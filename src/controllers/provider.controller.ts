@@ -35,6 +35,14 @@ export const createProvider = async (req: Request, res: Response) => {
       }
     }
 
+    // Validar email si se proporciona
+    if (email && !email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El formato del email no es válido'
+      });
+    }
+
     // Creamos el proveedor con todos los campos opcionales
     const provider = await prisma.provider.create({
       data: {
@@ -45,7 +53,7 @@ export const createProvider = async (req: Request, res: Response) => {
         email: email?.trim()?.toLowerCase() || null,
         contactInfo: contactInfo ? JSON.parse(JSON.stringify(contactInfo)) : null,
         bankInfo: bankInfo ? JSON.parse(JSON.stringify(bankInfo)) : null,
-        status: 'ACTIVE'
+        status: 'ACTIVE',
       }
     });
 
@@ -67,7 +75,7 @@ export const createProvider = async (req: Request, res: Response) => {
 
 export const getProviders = async (req: Request, res: Response) => {
   try {
-    const { search, status } = req.query;
+    const { search, status, orderBy = 'name' } = req.query;
 
     const where = {
       status: status as string || 'ACTIVE',
@@ -82,7 +90,7 @@ export const getProviders = async (req: Request, res: Response) => {
 
     const providers = await prisma.provider.findMany({
       where,
-      orderBy: { name: 'asc' },
+      orderBy: { [orderBy as string]: 'asc' },
       include: {
         _count: {
           select: {
@@ -95,7 +103,8 @@ export const getProviders = async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      data: providers
+      data: providers,
+      count: providers.length
     });
 
   } catch (error) {
@@ -116,11 +125,20 @@ export const getProviderById = async (req: Request, res: Response) => {
       include: {
         purchaseOrders: {
           take: 5,
-          orderBy: { createdAt: 'desc' }
+          orderBy: { createdAt: 'desc' },
+          include: {
+            items: true
+          }
         },
         paymentRequests: {
           take: 5,
           orderBy: { createdAt: 'desc' }
+        },
+        _count: {
+          select: {
+            purchaseOrders: true,
+            paymentRequests: true
+          }
         }
       }
     });
@@ -177,16 +195,26 @@ export const updateProvider = async (req: Request, res: Response) => {
       });
     }
 
+    // Validar email si se proporciona
+    if (email && !email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El formato del email no es válido'
+      });
+    }
+
+    const updateData = {
+      name: name?.trim() || undefined,
+      address: address?.trim() || null,
+      phone: phone?.trim() || null,
+      email: email?.trim()?.toLowerCase() || null,
+      contactInfo: contactInfo ? JSON.parse(JSON.stringify(contactInfo)) : undefined,
+      bankInfo: bankInfo ? JSON.parse(JSON.stringify(bankInfo)) : undefined,
+    };
+
     const provider = await prisma.provider.update({
       where: { id },
-      data: {
-        name: name?.trim() || undefined,
-        address: address?.trim() || null,
-        phone: phone?.trim() || null,
-        email: email?.trim()?.toLowerCase() || null,
-        contactInfo: contactInfo ? JSON.parse(JSON.stringify(contactInfo)) : undefined,
-        bankInfo: bankInfo ? JSON.parse(JSON.stringify(bankInfo)) : undefined,
-      }
+      data: updateData
     });
 
     res.json({
@@ -256,6 +284,69 @@ export const deleteProvider = async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: 'Error al eliminar el proveedor'
+    });
+  }
+};
+
+// Método adicional para obtener estadísticas agregadas
+export const getProviderStats = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const stats = await prisma.provider.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: {
+            purchaseOrders: true,
+            paymentRequests: true
+          }
+        },
+        purchaseOrders: {
+          select: {
+            totalAmount: true,
+            status: true
+          }
+        },
+        paymentRequests: {
+          select: {
+            amount: true,
+            status: true
+          }
+        }
+      }
+    });
+
+    if (!stats) {
+      return res.status(404).json({
+        success: false,
+        message: 'Proveedor no encontrado'
+      });
+    }
+
+    const totalOrders = stats._count.purchaseOrders;
+    const totalPayments = stats._count.paymentRequests;
+    const totalAmount = stats.purchaseOrders.reduce((sum, order) => sum + order.totalAmount, 0);
+    const paidAmount = stats.paymentRequests
+      .filter(payment => payment.status === 'COMPLETED')
+      .reduce((sum, payment) => sum + payment.amount, 0);
+
+    res.json({
+      success: true,
+      data: {
+        totalOrders,
+        totalPayments,
+        totalAmount,
+        paidAmount,
+        pendingAmount: totalAmount - paidAmount
+      }
+    });
+
+  } catch (error) {
+    console.error('Get provider stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener estadísticas del proveedor'
     });
   }
 };

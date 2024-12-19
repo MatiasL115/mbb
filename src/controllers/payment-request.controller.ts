@@ -291,9 +291,13 @@ export const approveTechnical = async (req: RequestWithUser, res: Response) => {
       where: { id },
       data: {
         status: 'TECHNICAL_APPROVED',
-        technicalApproverId: req.user.id,
+        technicalApprover: {
+          connect: {
+            id: req.user.id
+          }
+        },
         technicalApprovalDate: new Date(),
-        technicalApprovalComment: comment
+        technicalApprovalComment: comment || null
       },
       include: {
         provider: true,
@@ -303,11 +307,16 @@ export const approveTechnical = async (req: RequestWithUser, res: Response) => {
             name: true,
             email: true
           }
+        },
+        technicalApprover: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
         }
       }
     });
-
-    // Aquí podrías agregar lógica para enviar notificaciones
 
     res.json({
       success: true,
@@ -329,8 +338,16 @@ export const approveFinancial = async (req: RequestWithUser, res: Response) => {
     const { id } = req.params;
     const { comment, paymentDetails } = req.body;
 
+    console.log('Iniciando aprobación financiera:', {
+      id,
+      userId: req.user.id,
+      userRole: req.user.role.name,
+      requestBody: req.body
+    });
+
     // Verificar permisos del usuario
     if (req.user.role.name !== 'FINANCIAL_APPROVER' && req.user.role.name !== 'ADMIN') {
+      console.log('Usuario no tiene permisos:', req.user.role.name);
       return res.status(403).json({ 
         success: false,
         message: 'No tiene permisos para realizar esta acción' 
@@ -339,8 +356,14 @@ export const approveFinancial = async (req: RequestWithUser, res: Response) => {
 
     // Verificar que la solicitud existe y tiene aprobación técnica
     const currentRequest = await prisma.paymentRequest.findUnique({
-      where: { id }
+      where: { id },
+      include: {
+        technicalApprover: true,
+        financialApprover: true
+      }
     });
+
+    console.log('Solicitud encontrada:', currentRequest);
 
     if (!currentRequest) {
       return res.status(404).json({
@@ -356,14 +379,25 @@ export const approveFinancial = async (req: RequestWithUser, res: Response) => {
       });
     }
 
+    console.log('Preparando actualización con datos:', {
+      status: 'FINANCIAL_APPROVED',
+      financialApproverId: req.user.id,
+      comment,
+      paymentDetails
+    });
+
     // Aprobar financieramente la solicitud
     const request = await prisma.paymentRequest.update({
       where: { id },
       data: {
         status: 'FINANCIAL_APPROVED',
-        financialApproverId: req.user.id,
+        financialApprover: {
+          connect: {
+            id: req.user.id
+          }
+        },
         financialApprovalDate: new Date(),
-        financialApprovalComment: comment,
+        financialApprovalComment: comment || null,
         paymentDetails: paymentDetails ? JSON.stringify(paymentDetails) : null
       },
       include: {
@@ -374,11 +408,25 @@ export const approveFinancial = async (req: RequestWithUser, res: Response) => {
             name: true,
             email: true
           }
+        },
+        financialApprover: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        },
+        technicalApprover: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
         }
       }
     });
 
-    // Aquí podrías agregar lógica para enviar notificaciones
+    console.log('Solicitud actualizada exitosamente:', request);
 
     res.json({
       success: true,
@@ -386,11 +434,21 @@ export const approveFinancial = async (req: RequestWithUser, res: Response) => {
       message: 'Solicitud aprobada financieramente'
     });
   } catch (error) {
-    console.error('Error en approveFinancial:', error);
+    console.error('Error detallado en approveFinancial:', {
+      error,
+      stack: error.stack,
+      message: error.message,
+      code: error.code
+    });
+    
     res.status(500).json({ 
       success: false,
       message: 'Error al aprobar solicitud',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        code: error.code,
+        details: error.details
+      } : undefined
     });
   }
 };
@@ -413,11 +471,22 @@ export const rejectRequest = async (req: RequestWithUser, res: Response) => {
         status: 'REJECTED',
         rejectionComment: comment,
         rejectedAt: new Date(),
-        rejectedById: req.user.id
+        rejectedBy: {
+          connect: {
+            id: req.user.id
+          }
+        }
       },
       include: {
         provider: true,
         requester: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        },
+        rejectedBy: {
           select: {
             id: true,
             name: true,
@@ -464,6 +533,28 @@ export const getPendingRequests = async (req: RequestWithUser, res: Response) =>
             name: true,
             email: true
           }
+        },
+        technicalApprover: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        },
+        financialApprover: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        },
+        purchaseOrder: true,
+        rejectedBy: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
         }
       },
       orderBy: {
@@ -486,6 +577,7 @@ export const getPendingRequests = async (req: RequestWithUser, res: Response) =>
   }
 };
 
+// Mantener el export default igual
 export default {
   createPaymentRequest,
   getPaymentRequests,
