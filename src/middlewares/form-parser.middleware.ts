@@ -20,10 +20,12 @@ export const formParser = (req: Request, res: Response, next: NextFunction) => {
         error: err.message
       });
     } else if (err) {
+      // Si err no es MulterError, puede ser unknown, lo casteamos a Error
+      const parsedError = err as Error;
       return res.status(500).json({
         success: false,
         message: 'Error interno al procesar formulario',
-        error: err.message
+        error: parsedError.message
       });
     }
 
@@ -33,10 +35,11 @@ export const formParser = (req: Request, res: Response, next: NextFunction) => {
         const parsedData = JSON.parse(req.body.data);
         req.body = { ...parsedData, files: req.files };
       } catch (error) {
+        const parseError = error as Error;
         return res.status(400).json({
           success: false,
           message: 'Error al parsear datos JSON',
-          error: error.message
+          error: parseError.message
         });
       }
     }

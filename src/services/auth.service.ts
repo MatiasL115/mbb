@@ -2,13 +2,32 @@
 import prisma from '../config/prisma';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { User, Role } from '@prisma/client';
+import { User, Role, Prisma } from '@prisma/client';
+import { ApiResponse, AuthUser } from '../types/common'; 
 
-interface LoginResponse {
-  success: boolean;
+// Definimos AppError como una clase
+class AppError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AppError';
+  }
+}
+
+interface LoginResponse extends ApiResponse<AuthUser> {
   token?: string;
-  user?: Partial<User>;
-  message?: string;
+}
+
+interface UserResponse extends ApiResponse<Partial<User & { role: Role }>> {}
+
+interface UsersListResponse extends ApiResponse<{
+  users: Partial<User & { role: Role }>[];
+  total: number;
+}> {
+  pagination?: {
+    total: number;
+    limit: number;
+    offset: number;
+  };
 }
 
 interface CreateUserInput {
@@ -22,6 +41,14 @@ interface UpdateUserInput {
   name?: string;
   email?: string;
   roleId?: string;
+}
+
+interface UserFilters {
+  search?: string;
+  roleId?: string;
+  status?: string;
+  page?: number;
+  limit?: number;
 }
 
 class AuthService {
@@ -51,7 +78,16 @@ class AuthService {
       }
 
       const token = jwt.sign(
-        { id: user.id, role: user.role.name },
+        { 
+          id: user.id, 
+          name: user.name,
+          email: user.email,
+          role: {
+            id: user.role.id,
+            name: user.role.name,
+            permissions: user.role.permissions
+          }
+        },
         this.JWT_SECRET,
         { expiresIn: this.JWT_EXPIRES_IN }
       );
@@ -61,22 +97,24 @@ class AuthService {
       return {
         success: true,
         token,
-        user: userWithoutPassword
+        data: userWithoutPassword as AuthUser
       };
     } catch (error) {
-      console.error('Login error:', error);
-      throw new Error('Error en el proceso de login');
+      throw new AppError('Error en el proceso de login');
     }
   }
 
-  static async createUser(userData: CreateUserInput): Promise<Partial<User>> {
+  static async createUser(userData: CreateUserInput): Promise<UserResponse> {
     try {
       const existingUser = await prisma.user.findUnique({
         where: { email: userData.email }
       });
 
       if (existingUser) {
-        throw new Error('Ya existe un usuario con ese email');
+        return {
+          success: false,
+          message: 'Ya existe un usuario con ese email'
+        };
       }
 
       const passwordHash = await bcrypt.hash(userData.password, 10);
@@ -86,7 +124,9 @@ class AuthService {
           email: userData.email,
           name: userData.name,
           passwordHash,
-          roleId: userData.roleId
+          roleId: userData.roleId,
+          // Asumimos que el modelo tiene un campo status
+          status: 'ACTIVE'
         },
         include: {
           role: true
@@ -94,14 +134,17 @@ class AuthService {
       });
 
       const { passwordHash: _, ...userWithoutPassword } = user;
-      return userWithoutPassword;
+      
+      return {
+        success: true,
+        data: userWithoutPassword
+      };
     } catch (error) {
-      console.error('Create user error:', error);
-      throw error;
+      throw new AppError('Error al crear usuario');
     }
   }
 
-  static async getUserById(id: string): Promise<Partial<User> | null> {
+  static async getUserById(id: string): Promise<UserResponse> {
     try {
       const user = await prisma.user.findUnique({
         where: { id },
@@ -110,17 +153,25 @@ class AuthService {
         }
       });
 
-      if (!user) return null;
+      if (!user) {
+        return {
+          success: false,
+          message: 'Usuario no encontrado'
+        };
+      }
 
       const { passwordHash, ...userWithoutPassword } = user;
-      return userWithoutPassword;
+      
+      return {
+        success: true,
+        data: userWithoutPassword
+      };
     } catch (error) {
-      console.error('Get user error:', error);
-      throw error;
+      throw new AppError('Error al obtener usuario');
     }
   }
 
-  static async updateUser(id: string, updateData: UpdateUserInput): Promise<Partial<User>> {
+  static async updateUser(id: string, updateData: UpdateUserInput): Promise<UserResponse> {
     try {
       const user = await prisma.user.update({
         where: { id },
@@ -131,26 +182,35 @@ class AuthService {
       });
 
       const { passwordHash, ...userWithoutPassword } = user;
-      return userWithoutPassword;
+      
+      return {
+        success: true,
+        data: userWithoutPassword
+      };
     } catch (error) {
-      console.error('Update user error:', error);
-      throw error;
+      throw new AppError('Error al actualizar usuario');
     }
   }
 
-  static async updatePassword(id: string, currentPassword: string, newPassword: string): Promise<boolean> {
+  static async updatePassword(id: string, currentPassword: string, newPassword: string): Promise<ApiResponse<null>> {
     try {
       const user = await prisma.user.findUnique({
         where: { id }
       });
 
       if (!user) {
-        throw new Error('Usuario no encontrado');
+        return {
+          success: false,
+          message: 'Usuario no encontrado'
+        };
       }
 
       const isValidPassword = await bcrypt.compare(currentPassword, user.passwordHash);
       if (!isValidPassword) {
-        throw new Error('Contraseña actual incorrecta');
+        return {
+          success: false,
+          message: 'Contraseña actual incorrecta'
+        };
       }
 
       const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -159,43 +219,36 @@ class AuthService {
         data: { passwordHash }
       });
 
-      return true;
+      return {
+        success: true,
+        message: 'Contraseña actualizada correctamente'
+      };
     } catch (error) {
-      console.error('Update password error:', error);
-      throw error;
+      throw new AppError('Error al actualizar contraseña');
     }
   }
 
-  static async getAllUsers(filters: { 
-    search?: string;
-    roleId?: string;
-    status?: string;
-    page?: number;
-    limit?: number;
-  }): Promise<{ users: Partial<User>[]; total: number }> {
+  static async getAllUsers(filters: UserFilters): Promise<UsersListResponse> {
     try {
-      const where: any = {};
-      
-      if (filters.search) {
-        where.OR = [
-          { name: { contains: filters.search, mode: 'insensitive' } },
-          { email: { contains: filters.search, mode: 'insensitive' } }
-        ];
-      }
-      
-      if (filters.roleId) {
-        where.roleId = filters.roleId;
-      }
+      const where: Prisma.UserWhereInput = {
+        ...(filters.search && {
+          OR: [
+            { name: { contains: filters.search, mode: 'insensitive' } },
+            { email: { contains: filters.search, mode: 'insensitive' } }
+          ]
+        }),
+        ...(filters.roleId && { roleId: filters.roleId }),
+        ...(filters.status && { status: filters.status })
+      };
 
-      if (filters.status) {
-        where.status = filters.status;
-      }
+      const limit = filters.limit || 10;
+      const offset = filters.page ? (filters.page - 1) * limit : 0;
 
       const [users, total] = await Promise.all([
         prisma.user.findMany({
           where,
-          skip: filters.page ? (filters.page - 1) * (filters.limit || 10) : undefined,
-          take: filters.limit || 10,
+          skip: offset,
+          take: limit,
           include: {
             role: true
           },
@@ -212,54 +265,73 @@ class AuthService {
       });
 
       return {
-        users: usersWithoutPassword,
-        total
+        success: true,
+        data: {
+          users: usersWithoutPassword,
+          total
+        },
+        pagination: {
+          total,
+          limit,
+          offset
+        }
       };
     } catch (error) {
-      console.error('Get all users error:', error);
-      throw error;
+      throw new AppError('Error al obtener usuarios');
     }
   }
 
-  static async deactivateUser(id: string): Promise<Partial<User>> {
+  static async deactivateUser(id: string): Promise<UserResponse> {
     try {
       const user = await prisma.user.update({
         where: { id },
-        data: { status: 'INACTIVE' },
+        data: { 
+          status: 'INACTIVE' 
+        },
         include: {
           role: true
         }
       });
 
       const { passwordHash, ...userWithoutPassword } = user;
-      return userWithoutPassword;
+      
+      return {
+        success: true,
+        data: userWithoutPassword,
+        message: 'Usuario desactivado correctamente'
+      };
     } catch (error) {
-      console.error('Deactivate user error:', error);
-      throw error;
+      throw new AppError('Error al desactivar usuario');
     }
   }
 
-  static async activateUser(id: string): Promise<Partial<User>> {
+  static async activateUser(id: string): Promise<UserResponse> {
     try {
       const user = await prisma.user.update({
         where: { id },
-        data: { status: 'ACTIVE' },
+        data: { 
+          status: 'ACTIVE' 
+        },
         include: {
           role: true
         }
       });
 
       const { passwordHash, ...userWithoutPassword } = user;
-      return userWithoutPassword;
+      
+      return {
+        success: true,
+        data: userWithoutPassword,
+        message: 'Usuario activado correctamente'
+      };
     } catch (error) {
-      console.error('Activate user error:', error);
-      throw error;
+      throw new AppError('Error al activar usuario');
     }
   }
 
-  static async verifyToken(token: string): Promise<{ id: string; role: string } | null> {
+  static async verifyToken(token: string): Promise<AuthUser | null> {
     try {
-      const decoded = jwt.verify(token, this.JWT_SECRET) as { id: string; role: string };
+      const decoded = jwt.verify(token, this.JWT_SECRET) as AuthUser;
       return decoded;
     } catch (error) {
       return null;

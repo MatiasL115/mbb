@@ -18,11 +18,12 @@ export const createInvoice = async (req: Request, res: Response) => {
       });
     }
   } catch (error) {
-    console.error('Error in createInvoice controller:', error);
+    const err = error as Error;
+    console.error('Error in createInvoice controller:', err);
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
@@ -47,11 +48,12 @@ export const getInvoices = async (req: Request, res: Response) => {
       res.status(400).json(response);
     }
   } catch (error) {
-    console.error('Error in getInvoices controller:', error);
+    const err = error as Error;
+    console.error('Error in getInvoices controller:', err);
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
@@ -72,11 +74,12 @@ export const getInvoiceById = async (req: Request, res: Response) => {
       });
     }
   } catch (error) {
-    console.error('Error in getInvoiceById controller:', error);
+    const err = error as Error;
+    console.error('Error in getInvoiceById controller:', err);
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
@@ -97,11 +100,12 @@ export const updateInvoice = async (req: Request, res: Response) => {
       });
     }
   } catch (error) {
-    console.error('Error in updateInvoice controller:', error);
+    const err = error as Error;
+    console.error('Error in updateInvoice controller:', err);
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
@@ -122,11 +126,12 @@ export const registerPayment = async (req: Request, res: Response) => {
       });
     }
   } catch (error) {
-    console.error('Error in registerPayment controller:', error);
+    const err = error as Error;
+    console.error('Error in registerPayment controller:', err);
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
@@ -156,11 +161,12 @@ export const uploadDocument = async (req: Request, res: Response) => {
       });
     }
   } catch (error) {
-    console.error('Error in uploadDocument controller:', error);
+    const err = error as Error;
+    console.error('Error in uploadDocument controller:', err);
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
@@ -178,11 +184,22 @@ export const getNextNumber = async (req: Request, res: Response) => {
       });
     }
   } catch (error) {
-    console.error('Error in getNextNumber controller:', error);
+    const err = error as Error;
+    console.error('Error in getNextNumber controller:', err);
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
+};
+
+export default {
+  createInvoice,
+  getInvoices,
+  getInvoiceById,
+  updateInvoice,
+  registerPayment,
+  uploadDocument,
+  getNextNumber
 };

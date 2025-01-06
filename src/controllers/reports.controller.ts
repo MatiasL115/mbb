@@ -2,17 +2,13 @@
 import { Request, Response } from 'express';
 import prisma from '../config/prisma';
 
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-    role: {
-      name: string;
-    };
-  };
-}
-
-export const getDashboardStats = async (req: RequestWithUser, res: Response) => {
+export const getDashboardStats = async (req: Request, res: Response) => {
   try {
+    // Verificar que el usuario esté autenticado
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'No autenticado' });
+    }
+
     const [
       totalPaymentRequests,
       pendingRequests,
@@ -71,8 +67,13 @@ export const getDashboardStats = async (req: RequestWithUser, res: Response) => 
   }
 };
 
-export const getPaymentRequestsReport = async (req: RequestWithUser, res: Response) => {
+export const getPaymentRequestsReport = async (req: Request, res: Response) => {
   try {
+    // Verificar que el usuario esté autenticado
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'No autenticado' });
+    }
+
     const { startDate, endDate, status } = req.query;
 
     const requests = await prisma.paymentRequest.findMany({
@@ -128,8 +129,13 @@ export const getPaymentRequestsReport = async (req: RequestWithUser, res: Respon
   }
 };
 
-export const getPurchaseOrdersReport = async (req: RequestWithUser, res: Response) => {
+export const getPurchaseOrdersReport = async (req: Request, res: Response) => {
   try {
+    // Verificar que el usuario esté autenticado
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'No autenticado' });
+    }
+
     const { startDate, endDate, status } = req.query;
 
     const orders = await prisma.purchaseOrder.findMany({

@@ -1,18 +1,14 @@
 // src/routes/reports.routes.ts
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middlewares/auth.middleware';
-import {
-  getDashboardStats,
-  getPaymentRequestsReport,
-  getPurchaseOrdersReport
-} from '../controllers/reports.controller';
+import { getDashboardStats, getPaymentRequestsReport, getPurchaseOrdersReport } from '../controllers/reports.controller';
 
 const router = Router();
 
 router.use(authMiddleware);
 
-router.get('/dashboard', getDashboardStats);
-router.get('/payment-requests', getPaymentRequestsReport);
-router.get('/purchase-orders', getPurchaseOrdersReport);
+router.get('/dashboard', (req: Request, res: Response) => getDashboardStats(req, res));
+router.get('/payment-requests', (req: Request, res: Response) => getPaymentRequestsReport(req, res));
+router.get('/purchase-orders', (req: Request, res: Response) => getPurchaseOrdersReport(req, res));
 
 export default router;

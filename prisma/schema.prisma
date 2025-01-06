@@ -1,3 +1,6 @@
+// =================================================================
+// Configuración General
+// =================================================================
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -7,7 +10,10 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Enums
+// =================================================================
+// Enums del Sistema
+// =================================================================
+
 enum InvoiceStatus {
   DRAFT
   ISSUED
@@ -27,203 +33,332 @@ enum PaymentMethod {
   TRANSFER
 }
 
-model User {
-  id            String         @id @default(uuid())
-  email         String         @unique
-  name          String
-  passwordHash  String
-  role          Role          @relation(fields: [roleId], references: [id])
-  roleId        String
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+enum PaymentStatus {
+  PENDING
+  PROCESSED
+  VOIDED
+}
 
-  // Relaciones
-  paymentRequests     PaymentRequest[] @relation("Requester")
-  approvalsTechnical  PaymentRequest[] @relation("TechnicalApprover")
-  approvalsFinancial  PaymentRequest[] @relation("FinancialApprover")
-  rejections          PaymentRequest[] @relation("Rejections")
-  createdOrders       PurchaseOrder[]  @relation("Creator")
-  approvedOrders      PurchaseOrder[]  @relation("Approver")
-  rejectedOrders      PurchaseOrder[]  @relation("Rejecter")
-  createdLoans        Loan[]           @relation("LoanCreator")
-  registeredPayments  LoanPayment[]    @relation("PaymentRegistrar")
-  orderHistory        PurchaseOrderHistory[]
+// Enums para el módulo bancario
+enum Currency {
+  PYG
+  USD
+  EUR
+  BRL
+  ARS
+}
+
+enum AccountType {
+  CORRIENTE
+  AHORRO
+}
+
+enum CheckType {
+  REGULAR
+  DEFERRED
+}
+
+enum CheckFormat {
+  REGULAR
+  COMPACT
+  CONTINUOUS
+}
+
+enum CheckStatus {
+  AVAILABLE
+  ISSUED
+  VOIDED
+  CASHED
+}
+
+enum MovementType {
+  CREDIT
+  DEBIT
+}
+
+enum MovementStatus {
+  PENDING
+  RECONCILED
+  DISPUTED
+}
+
+enum ReconciliationType {
+  AUTOMATIC
+  MANUAL
+  ADJUSTED
+}
+
+enum ReconciliationStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  DISPUTED
+}
+
+// =================================================================
+// Modelos Base del Sistema
+// =================================================================
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @relation(fields: [roleId], references: [id])
+  roleId       String
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relaciones existentes
+  paymentRequests    PaymentRequest[]       @relation("Requester")
+  approvalsTechnical PaymentRequest[]       @relation("TechnicalApprover")
+  approvalsFinancial PaymentRequest[]       @relation("FinancialApprover")
+  rejections         PaymentRequest[]       @relation("Rejections")
+  createdOrders      PurchaseOrder[]        @relation("Creator")
+  approvedOrders     PurchaseOrder[]        @relation("Approver")
+  rejectedOrders     PurchaseOrder[]        @relation("Rejecter")
+  createdLoans       Loan[]                 @relation("LoanCreator")
+  registeredPayments LoanPayment[]          @relation("PaymentRegistrar")
+  orderHistory       PurchaseOrderHistory[]
+
+  // Nuevas relaciones para módulo bancario
+  processedPayments      Payment[]            @relation("PaymentProcessor")
+  createdMovements       BankMovement[]       @relation("MovementCreator")
+  createdReconciliations BankReconciliation[] @relation("ReconciliationCreator")
 
   @@index([roleId])
+  @@index([status])
 }
 
 model Role {
-  id          String    @id @default(uuid())
-  name        String    @unique
-  permissions Json      
+  id          String   @id @default(uuid())
+  name        String   @unique
+  permissions Json
   users       User[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
 }
 
+// =================================================================
+// Modelos de Negocio Existentes
+// =================================================================
+
 model Provider {
-  id          String    @id @default(uuid())
-  name        String    
-  ruc         String?   @unique  
+  id          String   @id @default(uuid())
+  name        String
+  ruc         String?  @unique
   address     String?
   phone       String?
   email       String?
-  status      String    @default("ACTIVE")
-  contactInfo Json?     
-  bankInfo    Json?     
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  status      String   @default("ACTIVE")
+  contactInfo Json?
+  bankInfo    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
 
-  // Relaciones
+  // Relaciones existentes
   paymentRequests PaymentRequest[]
   purchaseOrders  PurchaseOrder[]
+  categories      Category[]
+  subcategories   Subcategory[]
+  PurchaseInvoice PurchaseInvoice[]
+
+  // Relaciones nuevas (Nota de Crédito y Recibos)
+  purchaseCreditNotes PurchaseCreditNote[]
+  purchaseReceipts    PurchaseReceipt[]
 
   @@index([status])
 }
 
-model Project {
-  id            String    @id @default(uuid())
+model Category {
+  id            String        @id @default(uuid())
   name          String
-  code          String    @unique
-  description   String?
-  status        String    @default("ACTIVE")
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  subcategories Subcategory[]
+  providers     Provider[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @default(now())
+}
 
-  // Relaciones
-  loans         Loan[]
-  invoices      Invoice[]
-  budgetItems   BudgetItem[]
-  purchaseOrders PurchaseOrder[]
+model Subcategory {
+  id         String     @id @default(uuid())
+  name       String
+  isDefault  Boolean    @default(false)
+  category   Category   @relation(fields: [categoryId], references: [id])
+  categoryId String
+  providers  Provider[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @default(now())
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  code        String   @unique
+  description String?
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
+
+  loans           Loan[]
+  invoices        Invoice[]
+  budgetItems     BudgetItem[]
+  purchaseOrders  PurchaseOrder[]
+  PurchaseInvoice PurchaseInvoice[]
+
+  // Nuevas relaciones
+  purchaseCreditNotes PurchaseCreditNote[]
+  purchaseReceipts    PurchaseReceipt[]
 
   @@index([status])
 }
 
 model BudgetItem {
-  id            String    @id @default(uuid())
-  name          String
-  code          String    @unique
-  description   String?
-  amount        Decimal
-  status        String    @default("ACTIVE")
-  projectId     String
-  
-  // Relaciones
-  project       Project   @relation(fields: [projectId], references: [id])
-  purchaseOrders PurchaseOrder[]
-  transactions  BudgetTransaction[]
-  
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id          String  @id @default(uuid())
+  name        String
+  code        String  @unique
+  description String?
+  amount      Decimal
+  status      String  @default("ACTIVE")
+  projectId   String
+
+  project         Project             @relation(fields: [projectId], references: [id])
+  purchaseOrders  PurchaseOrder[]
+  transactions    BudgetTransaction[]
+  paymentRequests PaymentRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   @@index([projectId])
   @@index([status])
 }
 
 model BudgetTransaction {
-  id            String    @id @default(uuid())
-  budgetItemId  String
-  amount        Decimal
-  type          String    // CREDIT o DEBIT
-  reference     String    // Número de OC u otro documento
-  description   String?
-  
-  // Relaciones
-  budgetItem    BudgetItem @relation(fields: [budgetItemId], references: [id])
-  
-  createdAt     DateTime  @default(now())
+  id           String  @id @default(uuid())
+  budgetItemId String
+  amount       Decimal
+  type         String
+  reference    String
+  description  String?
+
+  budgetItem BudgetItem @relation(fields: [budgetItemId], references: [id])
+
+  createdAt DateTime @default(now())
 
   @@index([budgetItemId])
   @@index([type])
 }
 
+// =================================================================
+// PaymentRequest y Payment
+// =================================================================
+
 model PaymentRequest {
-  id          String    @id @default(uuid())
-  number      String    @unique
-  type        String    // DIRECT, WITH_PO, PARTIAL
-  providerId  String
-  amount      Decimal
-  description String?
-  status      String    @default("PENDING")
-  paymentType String    @default("contado")  // contado, diferido
-  paymentTerm String?   // 30, 60, 90 días
-  paymentDate DateTime?
+  id             String    @id @default(uuid())
+  number         String    @unique
+  type           String
+  providerId     String
+  amount         Decimal
+  description    String?
+  status         String    @default("PENDING")
+  paymentType    String    @default("contado")
+  paymentTerm    String?
+  paymentDate    DateTime?
   paymentDetails String?
 
-  // Campos de aprobación técnica
-  technicalApproverId String?
-  technicalApprovalDate DateTime?
-  technicalApprovalComment String?
-  
-  // Campos de aprobación financiera
-  financialApproverId String?
-  financialApprovalDate DateTime?
-  financialApprovalComment String?
-  
-  // Campos de rechazo
-  rejectedById String?
-  rejectionComment String?
-  rejectedAt DateTime?
-  
-  purchaseOrderId String?
-  requesterId String
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  budgetItemId String?
+  budgetItem   BudgetItem? @relation(fields: [budgetItemId], references: [id])
 
-  // Relaciones
-  provider    Provider  @relation(fields: [providerId], references: [id])
-  requester   User     @relation("Requester", fields: [requesterId], references: [id])
-  technicalApprover  User?    @relation("TechnicalApprover", fields: [technicalApproverId], references: [id])
-  financialApprover  User?    @relation("FinancialApprover", fields: [financialApproverId], references: [id])
-  rejectedBy         User?    @relation("Rejections", fields: [rejectedById], references: [id])
-  purchaseOrder      PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  technicalApproverId      String?
+  technicalApprovalDate    DateTime?
+  technicalApprovalComment String?
+
+  financialApproverId      String?
+  financialApprovalDate    DateTime?
+  financialApprovalComment String?
+
+  rejectedById     String?
+  rejectionComment String?
+  rejectedAt       DateTime?
+
+  purchaseOrderId String?
+  requesterId     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  provider          Provider       @relation(fields: [providerId], references: [id])
+  requester         User           @relation("Requester", fields: [requesterId], references: [id])
+  technicalApprover User?          @relation("TechnicalApprover", fields: [technicalApproverId], references: [id])
+  financialApprover User?          @relation("FinancialApprover", fields: [financialApproverId], references: [id])
+  rejectedBy        User?          @relation("Rejections", fields: [rejectedById], references: [id])
+  purchaseOrder     PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+
+  payments                 Payment[]
+  PaymentRequestAttachment PaymentRequestAttachment[]
 
   @@index([providerId])
   @@index([requesterId])
   @@index([status])
   @@index([type])
+  @@index([budgetItemId])
   @@index([technicalApproverId])
   @@index([financialApproverId])
   @@index([rejectedById])
   @@index([purchaseOrderId])
 }
 
-model PurchaseOrder {
-  id            String    @id @default(uuid())
-  number        String    @unique
-  providerId    String
-  projectId     String    
-  budgetItemId  String    
-  totalAmount   Decimal
-  status        String
-  description   String?
-  date          DateTime
-  dueDate       DateTime?
-  creatorId     String
+model PaymentRequestAttachment {
+  id               String  @id @default(uuid())
+  paymentRequestId String
+  fieldName        String?
+  originalName     String
+  filename         String
+  mimeType         String
+  size             Int
+  path             String?
 
-  // Campos de aprobación
-  approvedById  String?
-  approvedAt    DateTime?
+  paymentRequest PaymentRequest @relation(fields: [paymentRequestId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@index([paymentRequestId])
+}
+
+model PurchaseOrder {
+  id           String    @id @default(uuid())
+  number       String    @unique
+  providerId   String
+  projectId    String
+  budgetItemId String
+  totalAmount  Decimal
+  status       String
+  description  String?
+  date         DateTime
+  dueDate      DateTime?
+  creatorId    String
+
+  approvedById    String?
+  approvedAt      DateTime?
   approvalComment String?
 
-  // Campos de rechazo
-  rejectedById  String?
-  rejectedAt    DateTime?
+  rejectedById     String?
+  rejectedAt       DateTime?
   rejectionComment String?
-  
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  
-  // Relaciones
-  provider      Provider  @relation(fields: [providerId], references: [id])
-  project       Project   @relation(fields: [projectId], references: [id])
-  budgetItem    BudgetItem @relation(fields: [budgetItemId], references: [id])
-  creator       User      @relation("Creator", fields: [creatorId], references: [id])
-  approvedBy    User?     @relation("Approver", fields: [approvedById], references: [id])
-  rejectedBy    User?     @relation("Rejecter", fields: [rejectedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  provider        Provider               @relation(fields: [providerId], references: [id])
+  project         Project                @relation(fields: [projectId], references: [id])
+  budgetItem      BudgetItem             @relation(fields: [budgetItemId], references: [id])
+  creator         User                   @relation("Creator", fields: [creatorId], references: [id])
+  approvedBy      User?                  @relation("Approver", fields: [approvedById], references: [id])
+  rejectedBy      User?                  @relation("Rejecter", fields: [rejectedById], references: [id])
   paymentRequests PaymentRequest[]
-  items         PurchaseOrderItem[]
-  history      PurchaseOrderHistory[]
+  items           PurchaseOrderItem[]
+  history         PurchaseOrderHistory[]
 
   @@index([providerId])
   @@index([projectId])
@@ -235,74 +370,380 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderHistory {
-  id          String    @id @default(uuid())
-  orderId     String
-  userId      String
-  action      String    // CREATED, APPROVED, REJECTED, etc.
-  comment     String?
-  createdAt   DateTime  @default(now())
+  id        String   @id @default(uuid())
+  orderId   String
+  userId    String
+  action    String
+  comment   String?
+  createdAt DateTime @default(now())
 
-  // Relaciones
-  order       PurchaseOrder @relation(fields: [orderId], references: [id])
-  user        User        @relation(fields: [userId], references: [id])
+  order PurchaseOrder @relation(fields: [orderId], references: [id])
+  user  User          @relation(fields: [userId], references: [id])
 
   @@index([orderId])
   @@index([userId])
 }
 
 model PurchaseOrderItem {
-  id          String    @id @default(uuid())
+  id          String   @id @default(uuid())
   orderId     String
   description String
   quantity    Int
   unit        String
   unitPrice   Decimal
   total       Decimal
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  
-  // Relaciones
-  order       PurchaseOrder @relation(fields: [orderId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  order PurchaseOrder @relation(fields: [orderId], references: [id])
 
   @@index([orderId])
 }
 
-model Bank {
-  id          String    @id @default(uuid())
-  name        String
-  code        String    @unique
-  status      String    @default("ACTIVE")
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+// =================================================================
+// Modelos del Sistema Bancario
+// =================================================================
 
-  // Relaciones
-  loans       Loan[]
+model Bank {
+  id     String @id @default(uuid())
+  name   String
+  code   String @unique
+  status String @default("ACTIVE")
+
+  accounts      BankAccount[]
+  loans         Loan[]
+  importConfigs BankImportConfig[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   @@index([status])
 }
 
-model Loan {
-  id              String    @id @default(uuid())
-  number          String    @unique
-  bankId          String
-  projectId       String?
-  totalAmount     Decimal
-  term            Int       // En meses
-  interestRate    Decimal   // Tasa anual
-  startDate       DateTime
-  paymentFrequency String   // monthly, biweekly
-  status          String    @default("ACTIVE") // ACTIVE, COMPLETED, CANCELLED
-  observations    String?
-  creatorId       String
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  
+model BankAccount {
+  id                     String      @id @default(uuid())
+  bankId                 String
+  accountNumber          String
+  currency               Currency
+  balance                Float
+  type                   AccountType
+  alias                  String?
+  status                 String      @default("ACTIVE")
+  lastReconciliationDate DateTime?
+
+  bank              Bank                   @relation(fields: [bankId], references: [id])
+  checkbooks        Checkbook[]
+  movements         BankMovement[]
+  reconciliations   BankReconciliation[]
+  reconciledPeriods ReconciliationPeriod[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@unique([bankId, accountNumber])
+  @@index([bankId])
+  @@index([status])
+}
+
+model Checkbook {
+  id            String      @id @default(uuid())
+  bankAccountId String
+  initialNumber Int
+  finalNumber   Int
+  receptionDate DateTime
+  active        Boolean     @default(true)
+  checkType     CheckType
+  format        CheckFormat
+
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+  checks      Check[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@index([bankAccountId])
+}
+
+model Check {
+  id          String      @id @default(uuid())
+  checkbookId String
+  number      Int
+  issueDate   DateTime?
+  amount      Decimal?
+  beneficiary String?
+  status      CheckStatus @default(AVAILABLE)
+  voidReason  String?
+
+  checkbook Checkbook @relation(fields: [checkbookId], references: [id])
+  payment   Payment?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@unique([checkbookId, number])
+  @@index([checkbookId])
+  @@index([status])
+}
+
+// =================================================================
+// Modelo Payment (Pagos) - multiples pagos x PaymentRequest
+// =================================================================
+
+model Payment {
+  id            String        @id @default(uuid())
+  requestId     String
+  amount        Decimal
+  paymentDate   DateTime
+  beneficiary   String
+  status        PaymentStatus @default(PENDING)
+  paymentMethod PaymentMethod
+  reference     String?
+  processedAt   DateTime?
+  processedById String?
+  checkId       String?       @unique
+
+  request         PaymentRequest       @relation(fields: [requestId], references: [id])
+  processedBy     User?                @relation("PaymentProcessor", fields: [processedById], references: [id])
+  check           Check?               @relation(fields: [checkId], references: [id])
+  reconciliations BankReconciliation[]
+
+  // Relación muchos a muchos con PurchaseInvoice a través de PurchaseInvoicePayment (facturas recibidas)
+  invoicePayments PurchaseInvoicePayment[]
+
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  InvoicePayment InvoicePayment[]
+
+  @@index([requestId])
+  @@index([processedById])
+  @@index([status])
+}
+
+// =================================================================
+// Nuevo modelo PurchaseInvoice (facturas recibidas)
+// =================================================================
+
+model PurchaseInvoice {
+  id           String   @id @default(uuid())
+  number       String   @unique
+  date         DateTime
+  providerId   String?
+  projectId    String?
+  status       String   @default("PENDING")
+  total        Decimal  @default(0)
+  observations String?
+
+  provider Provider? @relation(fields: [providerId], references: [id])
+  project  Project?  @relation(fields: [projectId], references: [id])
+
+  // M:N con Payment a través de PurchaseInvoicePayment
+  invoicePayments PurchaseInvoicePayment[]
+
+  // Relación inversa a PurchaseCreditNote (muchas NC pueden apuntar a una sola invoice)
+  purchaseCreditNotes PurchaseCreditNote[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@index([providerId])
+  @@index([projectId])
+}
+
+// =================================================================
+// Nuevos Modelos: PurchaseCreditNote y PurchaseReceipt
+// =================================================================
+
+model PurchaseCreditNote {
+  id                String   @id @default(uuid())
+  number            String   @unique
+  date              DateTime
+  providerId        String?
+  projectId         String?
+  purchaseInvoiceId String?
+  reason            String?
+  total             Decimal  @default(0)
+  status            String   @default("ACTIVE")
+  observations      String?
+
   // Relaciones
-  bank            Bank      @relation(fields: [bankId], references: [id])
-  project         Project?  @relation(fields: [projectId], references: [id])
-  creator         User      @relation("LoanCreator", fields: [creatorId], references: [id])
-  installments    LoanInstallment[]
-  payments        LoanPayment[]
+  provider        Provider?        @relation(fields: [providerId], references: [id])
+  project         Project?         @relation(fields: [projectId], references: [id])
+  purchaseInvoice PurchaseInvoice? @relation(fields: [purchaseInvoiceId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  // Indexes
+  @@index([providerId])
+  @@index([projectId])
+  @@index([purchaseInvoiceId])
+}
+
+model PurchaseReceipt {
+  id           String   @id @default(uuid())
+  number       String   @unique
+  date         DateTime
+  providerId   String?
+  projectId    String?
+  total        Decimal  @default(0)
+  status       String   @default("ACTIVE")
+  observations String?
+
+  // Relaciones
+  provider Provider? @relation(fields: [providerId], references: [id])
+  project  Project?  @relation(fields: [projectId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  // Indexes
+  @@index([providerId])
+  @@index([projectId])
+}
+
+// =================================================================
+// Modelo intermedio: PurchaseInvoicePayment (M:N entre PurchaseInvoice y Payment)
+// =================================================================
+
+model PurchaseInvoicePayment {
+  id            String        @id @default(uuid())
+  invoiceId     String
+  paymentId     String
+  amount        Float
+  paymentDate   DateTime
+  paymentMethod PaymentMethod
+  reference     String?
+  observations  String?
+
+  purchaseInvoice PurchaseInvoice @relation(fields: [invoiceId], references: [id])
+  payment         Payment         @relation(fields: [paymentId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@unique([invoiceId, paymentId])
+  @@index([invoiceId])
+  @@index([paymentId])
+  @@index([paymentDate])
+}
+
+// =================================================================
+// Movimientos Bancarios y Conciliaciones
+// =================================================================
+
+model BankMovement {
+  id            String         @id @default(uuid())
+  bankAccountId String
+  date          DateTime
+  description   String
+  amount        Decimal
+  type          MovementType
+  reference     String?
+  status        MovementStatus @default(PENDING)
+  rawData       Json?
+  createdById   String
+
+  bankAccount    BankAccount         @relation(fields: [bankAccountId], references: [id])
+  createdBy      User                @relation("MovementCreator", fields: [createdById], references: [id])
+  reconciliation BankReconciliation?
+
+  createdAt DateTime @default(now())
+
+  @@index([bankAccountId])
+  @@index([date])
+  @@index([status])
+  @@index([createdById])
+}
+
+model BankReconciliation {
+  id                 String             @id @default(uuid())
+  bankAccountId      String
+  movementId         String             @unique
+  paymentId          String?
+  periodId           String
+  reconciliationDate DateTime           @default(now())
+  reconciliationType ReconciliationType
+  notes              String?
+  createdById        String
+
+  bankAccount BankAccount          @relation(fields: [bankAccountId], references: [id])
+  movement    BankMovement         @relation(fields: [movementId], references: [id])
+  payment     Payment?             @relation(fields: [paymentId], references: [id])
+  period      ReconciliationPeriod @relation(fields: [periodId], references: [id])
+  createdBy   User                 @relation("ReconciliationCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([bankAccountId])
+  @@index([movementId])
+  @@index([paymentId])
+  @@index([periodId])
+  @@index([createdById])
+}
+
+model ReconciliationPeriod {
+  id                     String               @id @default(uuid())
+  bankAccountId          String
+  year                   Int
+  month                  Int
+  status                 ReconciliationStatus @default(PENDING)
+  startBalance           Decimal
+  endBalance             Decimal
+  lastReconciliationDate DateTime?
+  notes                  String?
+
+  bankAccount     BankAccount          @relation(fields: [bankAccountId], references: [id])
+  reconciliations BankReconciliation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@unique([bankAccountId, year, month])
+  @@index([bankAccountId])
+  @@index([status])
+}
+
+model BankImportConfig {
+  id        String  @id @default(uuid())
+  bankId    String
+  name      String
+  config    Json
+  isDefault Boolean @default(false)
+
+  bank Bank @relation(fields: [bankId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@index([bankId])
+}
+
+// =================================================================
+// Modelos de Préstamos
+// =================================================================
+
+model Loan {
+  id               String   @id @default(uuid())
+  number           String   @unique
+  bankId           String
+  projectId        String?
+  totalAmount      Decimal
+  term             Int
+  interestRate     Decimal
+  startDate        DateTime
+  paymentFrequency String
+  status           String   @default("ACTIVE")
+  observations     String?
+  creatorId        String
+
+  bank         Bank              @relation(fields: [bankId], references: [id])
+  project      Project?          @relation(fields: [projectId], references: [id])
+  creator      User              @relation("LoanCreator", fields: [creatorId], references: [id])
+  installments LoanInstallment[]
+  payments     LoanPayment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   @@index([bankId])
   @@index([projectId])
@@ -311,85 +752,94 @@ model Loan {
 }
 
 model LoanInstallment {
-  id          String    @id @default(uuid())
-  loanId      String
-  number      Int
-  date        DateTime
-  amount      Decimal
-  capital     Decimal
-  interest    Decimal
-  balance     Decimal
-  status      String    @default("PENDING") // PENDING, PAID
-  paidDate    DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id       String   @id @default(uuid())
+  loanId   String
+  number   Int
+  date     DateTime
+  amount   Decimal
+  capital  Decimal
+  interest Decimal
+  balance  Decimal
+  status   String   @default("PENDING")
+  paidDate DateTime?
 
-  // Relaciones
-  loan        Loan      @relation(fields: [loanId], references: [id])
-  payment     LoanPayment?
+  loan     Loan            @relation(fields: [loanId], references: [id])
+  payments LoanPayment[]   // Relación 1 (installment) a N (payments)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   @@index([loanId])
   @@index([status])
 }
+
 
 model LoanPayment {
-  id              String    @id @default(uuid())
-  loanId          String
-  installmentId   String    @unique
-  amount          Decimal
-  paymentDate     DateTime
-  paymentMethod   String    // transfer, check
-  reference       String?
-  observations    String?
-  registeredById  String
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  
-  // Relaciones
-  loan            Loan      @relation(fields: [loanId], references: [id])
-  installment     LoanInstallment @relation(fields: [installmentId], references: [id])
-  registeredBy    User      @relation("PaymentRegistrar", fields: [registeredById], references: [id])
+  id             String         @id @default(uuid())
+  loanId         String
+  installmentId  String         // Sin @unique
+  amount         Decimal
+  paymentDate    DateTime
+  paymentMethod  PaymentMethod
+  reference      String?
+  observations   String?
+  registeredById String
+
+  loan        Loan            @relation(fields: [loanId], references: [id])
+  installment LoanInstallment @relation(fields: [installmentId], references: [id])
+  registeredBy User           @relation("PaymentRegistrar", fields: [registeredById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   @@index([loanId])
-  @@index([paymentDate])
-  @@index([registeredById])
+  @@index([installmentId])
 }
 
+// =================================================================
+// Modelos de Facturación (Clientes, Facturas, Items, Documentos)
+// =================================================================
+
 model Client {
-  id          String    @id @default(uuid())
-  name        String
-  status      String    @default("ACTIVE")
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  
-  // Relaciones
-  invoices    Invoice[]
+  id      String  @id @default(uuid())
+  name    String
+  ruc     String? @unique
+  email   String?
+  phone   String?
+  address String?
+  status  String  @default("ACTIVE")
+
+  invoices Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   @@index([status])
+  @@index([ruc])
+  @@index([name])
 }
 
 model Invoice {
-  id          String        @id @default(uuid())
-  number      String        @unique
-  date        DateTime
-  clientId    String
-  projectId   String?
-  paymentType PaymentType   @default(CASH)
-  paymentTerm Int?
-  dueDate     DateTime?
-  status      InvoiceStatus @default(DRAFT)
+  id           String        @id @default(uuid())
+  number       String        @unique
+  date         DateTime
+  clientId     String
+  projectId    String?
+  paymentType  PaymentType   @default(CASH)
+  paymentTerm  Int?
+  dueDate      DateTime?
+  status       InvoiceStatus @default(DRAFT)
   observations String?
-  total       Float         @default(0)
+  total        Float         @default(0)
 
-  // Relaciones
-  client      Client        @relation(fields: [clientId], references: [id])
-  project     Project?      @relation(fields: [projectId], references: [id])
-  items       InvoiceItem[]
-  payments    InvoicePayment[]
-  documents   Document[]
-  
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  client    Client           @relation(fields: [clientId], references: [id])
+  project   Project?         @relation(fields: [projectId], references: [id])
+  items     InvoiceItem[]
+  documents Document[]
+  payments  InvoicePayment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   @@index([clientId])
   @@index([projectId])
@@ -399,52 +849,157 @@ model Invoice {
 }
 
 model InvoiceItem {
-  id          String    @id @default(uuid())
+  id          String @id @default(uuid())
   invoiceId   String
   description String
   quantity    Float
   unitPrice   Float
   total       Float
-  
-  // Relaciones
-  invoice     Invoice   @relation(fields: [invoiceId], references: [id])
-  
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   @@index([invoiceId])
 }
 
+// =================================================================
+// Modelo intermedio: InvoicePayment (M:N para facturas emitidas)
+// =================================================================
+
 model InvoicePayment {
   id            String        @id @default(uuid())
   invoiceId     String
+  paymentId     String
   amount        Float
   paymentDate   DateTime
   paymentMethod PaymentMethod
   reference     String?
   observations  String?
 
-  // Relaciones
-  invoice       Invoice       @relation(fields: [invoiceId], references: [id])
-  
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  payment Payment @relation(fields: [paymentId], references: [id])
 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@unique([invoiceId, paymentId])
   @@index([invoiceId])
+  @@index([paymentId])
   @@index([paymentDate])
 }
 
 model Document {
-  id          String    @id @default(uuid())
-  invoiceId   String
-  name        String
-  path        String
-  type        String
+  id         String  @id @default(uuid())
+  invoiceId  String
+  name       String
+  path       String
+  type       String
+  size       Int
+  mimeType   String
+  uploadedBy String?
 
-  // Relaciones
-  invoice     Invoice   @relation(fields: [invoiceId], references: [id])
-  
-  uploadedAt  DateTime  @default(now())
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  uploadedAt DateTime @default(now())
 
   @@index([invoiceId])
+  @@index([type])
+}
+
+// 1) MODELOS PARA MAQUINARIA
+// =================================================================
+
+enum MachineStatus {
+  ACTIVE
+  IN_REPAIR
+  DISABLED
+  SOLD
+}
+
+model Machine {
+  id               String         @id @default(uuid())
+  code             String         @unique
+  name             String
+  brand            String?
+  model            String?
+  year             Int?
+  status           MachineStatus  @default(ACTIVE)
+  location         String?
+  hoursUsed        Int?
+  lastMaintenance  DateTime?
+  nextMaintenance  DateTime?
+  notes            String?
+
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  // Relación con historial de mantenimientos
+  maintenances     MachineMaintenance[]
+
+  @@index([status])
+  @@index([code])
+}
+
+model MachineMaintenance {
+  id          String   @id @default(uuid())
+  machineId   String
+  date        DateTime
+  description String
+  cost        Float?
+
+  machine   Machine  @relation(fields: [machineId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@index([machineId])
+}
+
+// =================================================================
+// 2) MODELOS PARA HERRAMIENTAS (TOOLFAMILY y TOOL)
+// =================================================================
+
+enum ToolStatus {
+  AVAILABLE
+  IN_USE
+  DAMAGED
+  DISCARDED
+}
+
+model ToolFamily {
+  id       String  @id @default(uuid())
+  sku      String  @unique
+  name     String
+  category String? // “MARTILLETE”, “ANDAMIO”, etc.
+  isBulk   Boolean @default(false) // true => se maneja por stock, false => unidades
+
+  // Tarifa o precio base (opcional)
+  price   Float?
+  unit    String? // unidad de medida (ej. “unidad”, “tramo”)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relación con Tool (muchos Tools pueden apuntar a esta Family)
+  tools Tool[]
+}
+
+model Tool {
+  id             String     @id @default(uuid())
+  familyId       String
+  code           String?    // p.ej. “T-001”
+  serialNumber   String?    // si es isBulk=false y quieres trackear SN
+  stockQuantity  Int?       // si isBulk=true => cuántos tengo
+  status         ToolStatus @default(AVAILABLE)
+  location       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  family   ToolFamily @relation(fields: [familyId], references: [id])
+
+  @@index([familyId])
+  @@index([status])
 }

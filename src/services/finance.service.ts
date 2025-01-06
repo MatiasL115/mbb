@@ -10,7 +10,7 @@ import {
   ApiResponse 
 } from '../types/finance.types';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+const API_URL = process.env.API_URL || 'http://localhost:3000/api';
 
 const financeApi = axios.create({
   baseURL: `${API_URL}/finance`,
@@ -19,11 +19,13 @@ const financeApi = axios.create({
   }
 });
 
-// Interceptor para agregar el token de autenticación
+// Interceptor para agregar el token de autenticación si se está en entorno navegador
 financeApi.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('token');
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
   }
   return config;
 });

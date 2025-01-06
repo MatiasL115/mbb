@@ -2,123 +2,109 @@
 import { Request, Response } from 'express';
 import prisma from '../config/prisma';
 
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-    role: {
-      name: string;
-      permissions: string[];
-    };
-  };
-}
-
-export const createRole = async (req: RequestWithUser, res: Response) => {
+export const createRole = async (req: Request, res: Response) => {
   try {
     const { name, permissions } = req.body;
 
     // Verificar si el rol ya existe
     const existingRole = await prisma.role.findUnique({
-      where: { name }
+      where: { name },
     });
-
     if (existingRole) {
       return res.status(400).json({
         success: false,
-        message: 'Ya existe un rol con ese nombre'
+        message: 'Ya existe un rol con ese nombre',
       });
     }
 
+    // Crear el rol
     const role = await prisma.role.create({
       data: {
         name,
-        permissions
-      }
+        // Ajusta a tu modelo: si permissions es JSON, string[], etc.
+        permissions,
+      },
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      data: role
+      data: role,
     });
   } catch (error) {
     console.error('Create role error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Error al crear rol'
+      message: 'Error al crear rol',
     });
   }
 };
 
-export const getRoles = async (req: RequestWithUser, res: Response) => {
+export const getRoles = async (req: Request, res: Response) => {
   try {
     const roles = await prisma.role.findMany({
       include: {
         _count: {
-          select: { users: true }
-        }
-      }
+          select: { users: true },
+        },
+      },
     });
 
-    res.json({
+    return res.json({
       success: true,
-      data: roles
+      data: roles,
     });
   } catch (error) {
     console.error('Get roles error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Error al obtener roles'
+      message: 'Error al obtener roles',
     });
   }
 };
 
-export const updateRole = async (req: RequestWithUser, res: Response) => {
+export const updateRole = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { permissions } = req.body;
 
     const role = await prisma.role.update({
       where: { id },
-      data: {
-        permissions
-      }
+      data: { permissions },
     });
 
-    res.json({
+    return res.json({
       success: true,
-      data: role
+      data: role,
     });
   } catch (error) {
     console.error('Update role error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Error al actualizar rol'
+      message: 'Error al actualizar rol',
     });
   }
 };
 
-export const assignRoleToUser = async (req: RequestWithUser, res: Response) => {
+export const assignRoleToUser = async (req: Request, res: Response) => {
   try {
     const { userId, roleId } = req.body;
 
+    // Actualizar el campo roleId en el usuario
     const user = await prisma.user.update({
       where: { id: userId },
-      data: {
-        roleId
-      },
-      include: {
-        role: true
-      }
+      data: { roleId },
+      include: { role: true },
     });
 
-    res.json({
+    return res.json({
       success: true,
-      data: user
+      data: user,
     });
   } catch (error) {
     console.error('Assign role error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Error al asignar rol'
+      message: 'Error al asignar rol',
     });
   }
 };

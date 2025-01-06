@@ -1,5 +1,5 @@
 // src/routes/role.routes.ts
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { authMiddleware } from '../middlewares/auth.middleware';
 import {
   createRole,
@@ -7,12 +7,13 @@ import {
   updateRole,
   assignRoleToUser
 } from '../controllers/role.controller';
+import { AuthUser } from '../types/common';
 
 const router = Router();
 
-// Solo administradores pueden gestionar roles
-const adminMiddleware = async (req: any, res: any, next: any) => {
-  if (req.user.role.name !== 'ADMIN') {
+const adminMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  const user = req.user as AuthUser | undefined;
+  if (!user || user.role.name !== 'ADMIN') {
     return res.status(403).json({
       success: false,
       message: 'Acceso denegado. Se requieren permisos de administrador.'
@@ -24,9 +25,9 @@ const adminMiddleware = async (req: any, res: any, next: any) => {
 router.use(authMiddleware);
 router.use(adminMiddleware);
 
-router.post('/', createRole);
-router.get('/', getRoles);
-router.put('/:id', updateRole);
-router.post('/assign', assignRoleToUser);
+router.post('/', (req: Request, res: Response) => createRole(req, res));
+router.get('/', (req: Request, res: Response) => getRoles(req, res));
+router.put('/:id', (req: Request, res: Response) => updateRole(req, res));
+router.post('/assign', (req: Request, res: Response) => assignRoleToUser(req, res));
 
 export default router;

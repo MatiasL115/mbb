@@ -11,17 +11,13 @@ interface LoanInstallment {
   balance: number;
 }
 
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-    role: {
-      name: string;
-    };
-  };
-}
-
-export const createLoan = async (req: RequestWithUser, res: Response) => {
+export const createLoan = async (req: Request, res: Response) => {
   try {
+    // Verificamos si hay usuario
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado' });
+    }
+
     const { 
       bankId, 
       projectId, 
@@ -78,7 +74,7 @@ export const createLoan = async (req: RequestWithUser, res: Response) => {
         status: 'ACTIVE',
         creatorId: req.user.id,
         installments: {
-          create: installments.map((inst: LoanInstallment) => ({
+          create: (installments as LoanInstallment[]).map((inst: LoanInstallment) => ({
             number: inst.number,
             date: new Date(inst.date),
             amount: inst.amount,
@@ -103,25 +99,27 @@ export const createLoan = async (req: RequestWithUser, res: Response) => {
       }
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       data: loan
     });
   } catch (error) {
     console.error('Create loan error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Error al crear préstamo'
     });
   }
 };
 
-export const getLoans = async (req: RequestWithUser, res: Response) => {
+export const getLoans = async (req: Request, res: Response) => {
   try {
     const { status, bankId } = req.query;
 
+    // Obtenemos los préstamos con Prisma
     const loans = await prisma.loan.findMany({
       where: {
+        // Filtra por estado y banco si vienen en la query
         ...(status && { status: String(status) }),
         ...(bankId && { bankId: String(bankId) })
       },
@@ -146,20 +144,25 @@ export const getLoans = async (req: RequestWithUser, res: Response) => {
       }
     });
 
-    res.json({
+    console.log(`getLoans => Se encontraron ${loans.length} préstamos`, loans);
+
+    return res.json({
       success: true,
       data: loans
     });
   } catch (error) {
     console.error('Get loans error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Error al obtener préstamos'
     });
   }
 };
 
-export const getLoanById = async (req: RequestWithUser, res: Response) => {
+// ====================
+// MODIFICACIÓN AQUÍ
+// ====================
+export const getLoanById = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
@@ -169,9 +172,7 @@ export const getLoanById = async (req: RequestWithUser, res: Response) => {
         bank: true,
         project: true,
         installments: {
-          orderBy: {
-            number: 'asc'
-          }
+          orderBy: { number: 'asc' }
         },
         payments: {
           include: {
@@ -202,20 +203,32 @@ export const getLoanById = async (req: RequestWithUser, res: Response) => {
       });
     }
 
-    res.json({
+    // Sumar todos los montos de las payments para obtener paidAmount
+    const totalPaid = loan.payments.reduce((acc, p) => acc + Number(p.amount), 0);
+
+    // Retornar el objeto con paidAmount incluido
+    const responseData = {
+      ...loan,
+      paidAmount: totalPaid
+    };
+
+    return res.json({
       success: true,
-      data: loan
+      data: responseData
     });
   } catch (error) {
     console.error('Get loan error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Error al obtener préstamo'
     });
   }
 };
+// ====================
+// FIN MODIFICACIÓN
+// ====================
 
-export const updateLoan = async (req: RequestWithUser, res: Response) => {
+export const updateLoan = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { status, observations } = req.body;
@@ -233,32 +246,28 @@ export const updateLoan = async (req: RequestWithUser, res: Response) => {
       }
     });
 
-    res.json({
+    return res.json({
       success: true,
       data: loan
     });
   } catch (error) {
     console.error('Update loan error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Error al actualizar préstamo'
     });
   }
 };
 
-export const registerPayment = async (req: RequestWithUser, res: Response) => {
+export const registerPayment = async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
-    const { 
-      installmentId, 
-      amount, 
-      paymentDate, 
-      paymentMethod, 
-      reference,
-      observations 
-    } = req.body;
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado' });
+    }
 
-    // Verificar que la cuota existe y pertenece al préstamo
+    const { id } = req.params;
+    const { installmentId, amount, paymentDate, paymentMethod, reference, observations } = req.body;
+
     const installment = await prisma.loanInstallment.findFirst({
       where: {
         id: installmentId,
@@ -273,7 +282,6 @@ export const registerPayment = async (req: RequestWithUser, res: Response) => {
       });
     }
 
-    // Registrar el pago
     const payment = await prisma.loanPayment.create({
       data: {
         loanId: id,
@@ -287,7 +295,6 @@ export const registerPayment = async (req: RequestWithUser, res: Response) => {
       }
     });
 
-    // Actualizar estado de la cuota
     await prisma.loanInstallment.update({
       where: { id: installmentId },
       data: {
@@ -296,7 +303,6 @@ export const registerPayment = async (req: RequestWithUser, res: Response) => {
       }
     });
 
-    // Verificar si todas las cuotas están pagadas para actualizar el préstamo
     const unpaidInstallments = await prisma.loanInstallment.count({
       where: {
         loanId: id,
@@ -313,13 +319,13 @@ export const registerPayment = async (req: RequestWithUser, res: Response) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       data: payment
     });
   } catch (error) {
     console.error('Register payment error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Error al registrar pago'
     });

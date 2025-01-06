@@ -1,8 +1,11 @@
+// src/index.ts
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import path from 'path';
+import fs from 'fs';
+import prisma from './config/prisma';
 
 // Importación de rutas
 import authRoutes from './routes/auth.routes';
@@ -16,11 +19,17 @@ import projectRoutes from './routes/project.routes';
 import invoiceRoutes from './routes/invoice.routes';
 import budgetRoutes from './routes/budget.routes';
 import dashboardRoutes from './routes/dashboard.routes';
-
-
+import clientRoutes from './routes/client.routes';
+import categoryRoutes from './routes/category.routes';
+import documentsRoutes from './routes/document.routes';
 
 // Cargar variables de entorno
 dotenv.config();
+
+// Crear carpeta uploads si no existe
+if (!fs.existsSync('uploads')) {
+  fs.mkdirSync('uploads');
+}
 
 // Crear instancia de Express
 const app = express();
@@ -32,16 +41,16 @@ const storage = multer.diskStorage({
     cb(null, 'uploads/');
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
+  },
 });
 
 const upload = multer({
   storage: storage,
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB
-    files: 10 
+    files: 10,
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
@@ -51,42 +60,74 @@ const upload = multer({
       'application/vnd.ms-excel',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'image/jpeg',
-      'image/png'
+      'image/png',
     ];
-    
+
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
       cb(new Error('Tipo de archivo no permitido'));
     }
-  }
+  },
 });
 
 // Configuración de CORS mejorada
 const corsOptions = {
   origin: [
     process.env.FRONTEND_URL || 'http://localhost:5173',
+    'http://165.22.186.220',
     'https://mbigua.sdp.lat',
     'https://api-mobile.mbigua.sdp.lat',
-    'exp://*',  // Para desarrollo con Expo
-    'http://localhost:19000', // Para desarrollo con Expo
-    'http://localhost:19006',  // Para desarrollo web con Expo
-    'http://192.168.0.6:3000', // Tu IP local para desarrollo
-    'http://192.168.0.6:19000', // Expo en tu IP local
-    'exp://192.168.0.6:19000' // Expo en tu IP local con protocolo exp
+    'https://api-mobile.mbigua.sdp.lat:8443',
+    'https://mbigua.sdp.lat:8443',
+    'exp://*',
+    'http://localhost:19000',
+    'http://localhost:19006',
+    'http://192.168.0.6:3000',
+    'http://192.168.0.6:19000',
+    'exp://192.168.0.6:19000',
+    'exp://192.168.0.17:8081',
+    'http://192.168.0.17:8081',
+    'http://localhost:8081'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'DNT',
+    'X-CustomHeader',
+    'Keep-Alive',
+    'User-Agent',
+    'If-Modified-Since',
+    'Cache-Control',
+    'Accept',
+    'Origin'
+  ],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
   credentials: true,
-  maxAge: 86400 // 24 horas
+  maxAge: 86400, // 24 horas
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 };
 
-app.use(cors(corsOptions));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || corsOptions.origin.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.error(`CORS bloqueado para origen: ${origin}`);
+      callback(new Error('CORS no permitido'));
+    }
+  },
+  methods: corsOptions.methods,
+  allowedHeaders: corsOptions.allowedHeaders,
+  credentials: true,
+}));
 
 // Middleware de análisis de cuerpo de solicitud
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // Servir archivos estáticos
 app.use('/uploads', express.static('uploads'));
@@ -100,29 +141,36 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Middleware de logging mejorado con información adicional
+// Middleware de logging mejorado
 app.use((req: Request, res: Response, next: NextFunction) => {
   const startTime = Date.now();
   const requestId = Math.random().toString(36).substring(7);
-  
+
   console.log(`[${new Date().toISOString()}] [${requestId}] ${req.method} ${req.path}`);
   console.log('Headers:', JSON.stringify(req.headers));
-  
+
   res.on('finish', () => {
     const duration = Date.now() - startTime;
     console.log(`[${new Date().toISOString()}] [${requestId}] ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
   });
-  
+
   next();
 });
 
 // Healthcheck
-app.get('/', (req: Request, res: Response) => {
-  res.json({ 
+app.get('/', async (req: Request, res: Response) => {
+  const uptime = process.uptime();
+  const dbStatus = await prisma.$connect()
+    .then(() => 'UP')
+    .catch(() => 'DOWN');
+
+  res.json({
     message: 'API de MBIGUA SDP funcionando!',
     version: process.env.npm_package_version || '1.0.0',
     environment: process.env.NODE_ENV,
-    timestamp: new Date().toISOString()
+    database: dbStatus,
+    uptime: `${Math.floor(uptime / 60)} mins ${Math.floor(uptime % 60)} secs`,
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -132,20 +180,16 @@ app.use('/api/providers', providerRoutes);
 app.use('/api/payment-requests', paymentRequestRoutes);
 app.use('/api/purchase-orders', purchaseOrderRoutes);
 app.use('/api/reports', reportsRoutes);
-
-// Nuevas rutas financieras
 app.use('/api/finance', financeRoutes);
 app.use('/api/banks', bankRoutes);
 app.use('/api/projects', projectRoutes);
-
-// Nuevas rutas invoice
 app.use('/api/invoices', invoiceRoutes);
-
-// Nuevas rutas presupuesto
 app.use('/api/budget', budgetRoutes);
-
-// Nuevas rutas reportes
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/clients', clientRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/documents', documentsRoutes);
+
 
 // Manejador de errores de multer
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
@@ -155,7 +199,7 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
       success: false,
       message: 'Error al procesar archivos',
       error: err.message,
-      code: err.code
+      code: err.code,
     });
   }
   next(err);
@@ -168,7 +212,7 @@ app.use('*', (req: Request, res: Response) => {
     message: 'Ruta no encontrada',
     path: req.originalUrl,
     method: req.method,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -179,15 +223,15 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
     message: 'Error interno del servidor',
     path: req.path,
     method: req.method,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   };
 
   if (process.env.NODE_ENV === 'development') {
     Object.assign(errorResponse, {
       error: {
         message: err.message,
-        stack: err.stack
-      }
+        stack: err.stack,
+      },
     });
   }
 
@@ -219,7 +263,7 @@ process.on('unhandledRejection', (reason: Error) => {
   console.error('🔥 Error no manejado:', {
     message: reason.message,
     stack: reason.stack,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -228,12 +272,10 @@ process.on('uncaughtException', (error: Error) => {
   console.error('🔥 Excepción no capturada:', {
     message: error.message,
     stack: error.stack,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
-  
+
   server.close(() => {
     process.exit(1);
   });
 });
-
-export default app;

@@ -1,18 +1,12 @@
 // src/controllers/purchase-order.controller.ts
+
 import { Request, Response } from 'express';
 import prisma from '../config/prisma';
 import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
+import { createHash } from 'crypto';
 
-// Interfaces
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-    role: {
-      name: string;
-    };
-  };
-}
+// Eliminamos las interfaces locales no necesarias, ya que Request extiende globalmente para tener req.user tipo AuthUser
 
 interface OrderItem {
   description: string;
@@ -40,8 +34,265 @@ interface RejectionData {
   comment: string;
 }
 
+/** Colores de marca o los que prefieras **/
+const LATORRE_BLUE = '#0059B3';
+const LATORRE_LIGHT_BLUE = '#E6ECFA';
+const LATORRE_DARK_GRAY = '#505050';
+const LATORRE_DARKER_BLUE = '#00478F';
+
+// ===============================
+// Funciones Auxiliares
+// ===============================
+const getBudgetItemBalance = async (budgetItemId: string): Promise<number> => {
+  try {
+    const budgetItem = await prisma.budgetItem.findUnique({
+      where: { id: budgetItemId },
+      include: { transactions: true }
+    });
+
+    if (!budgetItem) {
+      throw new Error('Partida presupuestaria no encontrada');
+    }
+
+    const balance = budgetItem.transactions.reduce((sum, trans) => {
+      return trans.type === 'CREDIT'
+        ? sum + Number(trans.amount)
+        : sum - Number(trans.amount);
+    }, Number(budgetItem.amount));
+
+    return balance;
+  } catch (error) {
+    console.error('Error calculating budget balance:', error);
+    throw error;
+  }
+};
+
+/** 
+ * Genera la "firma digital" usando datos clave de la orden. 
+ * Ajusta según tu lógica de negocio.
+ */
+function generateDigitalSignature(order: any): string {
+  const baseString = [
+    order.number,
+    order.date,
+    order.provider?.name || '',
+    order.project?.name || '',
+    order.totalAmount
+  ].join('|');
+
+  const hash = createHash('sha256').update(baseString).digest('hex');
+  return hash.slice(0, 16); // 16 caracteres
+}
+
+/**
+ * Nueva versión de la función para generar el PDF con PDFKit,
+ * usando colores de marca, tabla de ítems, firma digital, etc.
+ */
+function generatePurchaseOrderPdfBetter(doc: PDFKit.PDFDocument, order: any) {
+  try {
+    doc.font('Helvetica');
+    const pageWidth = doc.page.width;
+    const pageHeight = doc.page.height;
+
+    // Encabezado en azul con texto blanco
+    doc
+      .rect(0, 0, pageWidth, 60)
+      .fill(LATORRE_BLUE);
+
+    doc
+      .fillColor('white')
+      .fontSize(18)
+      .text('Orden de Compra', 0, 20, { align: 'center' });
+
+    // Restablecemos color y fuente para contenido
+    doc.fillColor('black').fontSize(12);
+    doc.y = 80;  // bajamos la posición vertical
+    doc.x = 50;  // margen izquierdo
+
+    // Datos principales
+    doc
+      .fontSize(14)
+      .fillColor(LATORRE_DARKER_BLUE)
+      .text(`Número: ${order.number}`, { continued: true })
+      .fillColor(LATORRE_DARK_GRAY)
+      .text(`  |  Fecha: ${order.date ? new Date(order.date).toLocaleDateString() : 'N/A'}`);
+
+    doc.moveDown(0.5);
+    doc.fontSize(10).fillColor('black')
+       .text('Datos del Proveedor', { underline: true });
+    doc.moveDown(0.3);
+
+    const provider = order.provider || {};
+    doc
+      .text(`Nombre: ${provider.name || 'N/A'}`)
+      .text(`RUC: ${provider.ruc || 'N/A'}`)
+      .text(`Dirección: ${provider.address || 'N/A'}`)
+      .text(`Teléfono: ${provider.phone || 'N/A'}`)
+      .moveDown(0.8);
+
+    doc
+      .fontSize(10)
+      .fillColor('black')
+      .text('Proyecto', { underline: true });
+    doc.moveDown(0.3);
+
+    const project = order.project || {};
+    const budgetItem = order.budgetItem || {};
+    doc
+      .text(`Nombre: ${project.name || 'N/A'}`)
+      .text(`Partida: ${budgetItem.name || 'N/A'}`)
+      .moveDown(0.8);
+
+    // Descripción
+    if (order.description) {
+      doc
+        .fontSize(10)
+        .fillColor('black')
+        .text('Descripción', { underline: true });
+      doc.moveDown(0.3);
+      doc.text(order.description).moveDown(0.8);
+    }
+
+    // Sección de ítems
+    doc
+      .fontSize(10)
+      .fillColor(LATORRE_DARKER_BLUE)
+      .text('Detalles de los Ítems', { underline: true });
+    doc.moveDown(0.5);
+
+    const itemX = 50;
+    const quantityX = 320;
+    const priceX = 380;
+    const totalX = 450;
+    const lineHeight = 16;
+    let currentY = doc.y;
+
+    // Cabecera “tabla”
+    doc
+      .rect(itemX - 5, currentY - 2, pageWidth - (itemX + 50), lineHeight + 4)
+      .fill(LATORRE_LIGHT_BLUE);
+
+    doc.fillColor('black').fontSize(10);
+    doc.text('Descripción', itemX, currentY);
+    doc.text('Cant.', quantityX, currentY);
+    doc.text('Precio', priceX, currentY);
+    doc.text('Total', totalX, currentY);
+
+    currentY += lineHeight;
+    doc
+      .moveTo(itemX - 5, currentY)
+      .lineTo(pageWidth - 50, currentY)
+      .stroke();
+
+    doc.fillColor('black');
+    let subtotal = 0;
+
+    (order.items || []).forEach((item: any) => {
+      // Control de salto de página manual
+      if (currentY > pageHeight - 100) {
+        doc.addPage();
+        currentY = 50;
+      }
+      currentY += 4;
+
+      // formateo de montos
+      const unitPrice = Number(item.unitPrice).toLocaleString('es-PY', {
+        style: 'currency',
+        currency: 'PYG'
+      });
+      const itemTotal = Number(item.total).toLocaleString('es-PY', {
+        style: 'currency',
+        currency: 'PYG'
+      });
+
+      doc.text(item.description, itemX, currentY, { width: quantityX - itemX - 5 });
+      doc.text(String(item.quantity || ''), quantityX, currentY);
+      doc.text(unitPrice, priceX, currentY);
+      doc.text(itemTotal, totalX, currentY);
+
+      currentY += lineHeight;
+      doc
+        .moveTo(itemX - 5, currentY)
+        .lineTo(pageWidth - 50, currentY)
+        .strokeColor(LATORRE_LIGHT_BLUE)
+        .stroke();
+
+      subtotal += Number(item.total) || 0;
+    });
+
+    currentY += 10;
+    const subtotalFormatted = subtotal.toLocaleString('es-PY', {
+      style: 'currency',
+      currency: 'PYG'
+    });
+    const totalFormatted = subtotalFormatted; // no sumamos IVA
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(10)
+      .fillColor('black')
+      .text('Subtotal:', priceX, currentY)
+      .text(subtotalFormatted, totalX, currentY, { align: 'left' });
+
+    currentY += lineHeight;
+    doc
+      .text('Total:', priceX, currentY)
+      .text(totalFormatted, totalX, currentY, { align: 'left' });
+    doc.font('Helvetica');
+
+    // Firma digital
+    const digitalSignature = generateDigitalSignature(order);
+    currentY += 40;
+    if (currentY > pageHeight - 100) {
+      doc.addPage();
+      currentY = 50;
+    }
+    doc
+      .fontSize(8)
+      .fillColor(LATORRE_DARK_GRAY)
+      .text(`Firma Digital: ${digitalSignature}`, 50, currentY);
+    doc.text(
+      'Esta firma digital verifica la autenticidad de este documento.',
+      50,
+      currentY + 12
+    );
+
+    // Firmas
+    currentY += 40;
+    doc
+      .moveTo(50, currentY)
+      .lineTo(200, currentY)
+      .strokeColor('black')
+      .stroke();
+
+    doc
+      .moveTo(320, currentY)
+      .lineTo(470, currentY)
+      .stroke();
+
+    currentY += 5;
+    doc
+      .fontSize(10)
+      .fillColor('black')
+      .text('Elaborado por', 50, currentY)
+      .text(order.creator?.name || '____________________', 50, currentY + 15);
+
+    doc
+      .text('Autorizado por', 320, currentY)
+      .text(order.approvedBy?.name || '____________________', 320, currentY + 15);
+
+  } catch (error) {
+    console.error('Error generating PDF (improved):', error);
+    throw error;
+  }
+}
+
+// ===============================
+// CONTROLADORES
+// ===============================
+
 // GET /api/purchase-orders
-export const getAll = async (req: RequestWithUser, res: Response) => {
+const getAll = async (req: Request, res: Response) => {
   try {
     const { status, providerId, projectId, fromDate, toDate } = req.query;
 
@@ -63,35 +314,12 @@ export const getAll = async (req: RequestWithUser, res: Response) => {
         provider: true,
         project: true,
         budgetItem: true,
-        creator: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        },
-        approvedBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        },
-        rejectedBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        },
+        creator: { select: { id: true, name: true, email: true } },
+        approvedBy: { select: { id: true, name: true, email: true } },
+        rejectedBy: { select: { id: true, name: true, email: true } },
         items: true,
         paymentRequests: {
-          select: {
-            id: true,
-            number: true,
-            status: true,
-            amount: true
-          }
+          select: { id: true, number: true, status: true, amount: true }
         }
       },
       orderBy: {
@@ -99,34 +327,31 @@ export const getAll = async (req: RequestWithUser, res: Response) => {
       }
     });
 
-    // Calcular montos restantes para cada orden
     const ordersWithRemaining = orders.map(order => {
       const paidAmount = order.paymentRequests
         .filter(pr => pr.status === 'FINANCIAL_APPROVED')
         .reduce((sum, pr) => sum + Number(pr.amount), 0);
-      
+
       return {
         ...order,
         remainingAmount: Number(order.totalAmount) - paidAmount
       };
     });
 
-    res.json({
-      success: true,
-      data: ordersWithRemaining
-    });
+    res.json({ success: true, data: ordersWithRemaining });
   } catch (error) {
-    console.error('Get all purchase orders error:', error);
+    const err = error as Error;
+    console.error('Get all purchase orders error:', err);
     res.status(500).json({
       success: false,
       message: 'Error al obtener órdenes de compra',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
 
 // GET /api/purchase-orders/:id
-export const getById = async (req: RequestWithUser, res: Response) => {
+const getById = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
@@ -136,50 +361,22 @@ export const getById = async (req: RequestWithUser, res: Response) => {
         provider: true,
         project: true,
         budgetItem: true,
-        creator: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        },
-        approvedBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        },
-        rejectedBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        },
+        creator: { select: { id: true, name: true, email: true } },
+        approvedBy: { select: { id: true, name: true, email: true } },
+        rejectedBy: { select: { id: true, name: true, email: true } },
         items: true,
         paymentRequests: {
           include: {
-            requester: {
-              select: {
-                id: true,
-                name: true,
-                email: true
-              }
-            }
+            requester: { select: { id: true, name: true, email: true } }
           }
         }
       }
     });
 
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Orden de compra no encontrada'
-      });
+      return res.status(404).json({ success: false, message: 'Orden de compra no encontrada' });
     }
 
-    // Calcular monto restante
     const paidAmount = order.paymentRequests
       .filter(pr => pr.status === 'FINANCIAL_APPROVED')
       .reduce((sum, pr) => sum + Number(pr.amount), 0);
@@ -189,244 +386,25 @@ export const getById = async (req: RequestWithUser, res: Response) => {
       remainingAmount: Number(order.totalAmount) - paidAmount
     };
 
-    res.json({
-      success: true,
-      data: orderWithRemaining
-    });
+    res.json({ success: true, data: orderWithRemaining });
   } catch (error) {
-    console.error('Get purchase order error:', error);
+    const err = error as Error;
+    console.error('Get purchase order error:', err);
     res.status(500).json({
       success: false,
       message: 'Error al obtener orden de compra',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
-
-// POST /api/purchase-orders/:id/approve
-export const approve = async (req: RequestWithUser, res: Response) => {
-  try {
-    const { id } = req.params;
-    const { comment } = req.body as ApprovalData;
-
-    // Verificar que la orden existe y está pendiente
-    const order = await prisma.purchaseOrder.findUnique({
-      where: { id }
-    });
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Orden de compra no encontrada'
-      });
-    }
-
-    if (order.status !== 'PENDING') {
-      return res.status(400).json({
-        success: false,
-        message: 'La orden no está pendiente de aprobación'
-      });
-    }
-
-    // Aprobar la orden y registrar el historial
-    const approvedOrder = await prisma.$transaction(async (prisma) => {
-      // Actualizar estado de la orden
-      const updatedOrder = await prisma.purchaseOrder.update({
-        where: { id },
-        data: {
-          status: 'APPROVED',
-          approvedById: req.user.id,
-          approvedAt: new Date(),
-          approvalComment: comment?.trim() || null
-        },
-        include: {
-          provider: true,
-          project: true,
-          budgetItem: true,
-          creator: {
-            select: {
-              id: true,
-              name: true,
-              email: true
-            }
-          },
-          approvedBy: {
-            select: {
-              id: true,
-              name: true,
-              email: true
-            }
-          }
-        }
-      });
-
-      // Registrar en historial si hay comentario
-      if (comment?.trim()) {
-        await prisma.purchaseOrderHistory.create({
-          data: {
-            orderId: id,
-            userId: req.user.id,
-            action: 'APPROVED',
-            comment: comment.trim()
-          }
-        });
-      }
-
-      return updatedOrder;
-    });
-
-    res.json({
-      success: true,
-      data: approvedOrder,
-      message: 'Orden aprobada correctamente'
-    });
-  } catch (error) {
-    console.error('Approve order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al aprobar la orden',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// POST /api/purchase-orders/:id/reject
-export const reject = async (req: RequestWithUser, res: Response) => {
-  try {
-    const { id } = req.params;
-    const { comment } = req.body as RejectionData;
-
-    if (!comment?.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'El motivo del rechazo es requerido'
-      });
-    }
-
-    // Verificar que la orden existe y está pendiente
-    const order = await prisma.purchaseOrder.findUnique({
-      where: { id }
-    });
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Orden de compra no encontrada'
-      });
-    }
-
-    if (order.status !== 'PENDING') {
-      return res.status(400).json({
-        success: false,
-        message: 'La orden no está pendiente de aprobación'
-      });
-    }
-
-    // Rechazar la orden y registrar el historial
-    const rejectedOrder = await prisma.$transaction(async (prisma) => {
-      // Actualizar estado de la orden
-      const updatedOrder = await prisma.purchaseOrder.update({
-        where: { id },
-        data: {
-          status: 'REJECTED',
-          rejectedById: req.user.id,
-          rejectedAt: new Date(),
-          rejectionComment: comment.trim()
-        },
-        include: {
-          provider: true,
-          project: true,
-          budgetItem: true,
-          creator: {
-            select: {
-              id: true,
-              name: true,
-              email: true
-            }
-          },
-          rejectedBy: {
-            select: {
-              id: true,
-              name: true,
-              email: true
-            }
-          }
-        }
-      });
-
-      // Registrar en historial
-      await prisma.purchaseOrderHistory.create({
-        data: {
-          orderId: id,
-          userId: req.user.id,
-          action: 'REJECTED',
-          comment: comment.trim()
-        }
-      });
-
-      return updatedOrder;
-    });
-
-    res.json({
-      success: true,
-      data: rejectedOrder,
-      message: 'Orden rechazada correctamente'
-    });
-  } catch (error) {
-    console.error('Reject order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al rechazar la orden',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// GET /api/purchase-orders/next-number
-export const getNextNumber = async (req: Request, res: Response) => {
-    try {
-      const year = new Date().getFullYear();
-      
-      // Buscar la última orden del año
-      const lastOrder = await prisma.purchaseOrder.findFirst({
-        where: {
-          number: {
-            startsWith: `OC-${year}`
-          }
-        },
-        orderBy: {
-          number: 'desc'
-        }
-      });
-  
-      // Generar el siguiente número
-      let nextNumber;
-      if (lastOrder) {
-        const lastNumber = parseInt(lastOrder.number.split('-')[2]);
-        nextNumber = `OC-${year}-${(lastNumber + 1).toString().padStart(4, '0')}`;
-      } else {
-        nextNumber = `OC-${year}-0001`;
-      }
-  
-      res.json({
-        success: true,
-        data: {
-          number: nextNumber
-        }
-      });
-    } catch (error) {
-      console.error('Get next number error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error al generar siguiente número',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
-  };
 
 // POST /api/purchase-orders
-export const create = async (req: RequestWithUser, res: Response) => {
+const create = async (req: Request, res: Response) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado' });
+    }
+
     const {
       providerId,
       projectId,
@@ -437,19 +415,14 @@ export const create = async (req: RequestWithUser, res: Response) => {
       items
     }: CreateOrderData = req.body;
 
-    // Validación de campos requeridos
-    if (!providerId || !projectId || !budgetItemId || !items?.length || !number) {
+    if (!providerId || !projectId || !budgetItemId || !items?.length || !number || !date) {
       return res.status(400).json({
         success: false,
         message: 'Faltan campos requeridos'
       });
     }
 
-    // Verificar que el número no exista
-    const existingOrder = await prisma.purchaseOrder.findFirst({
-      where: { number }
-    });
-
+    const existingOrder = await prisma.purchaseOrder.findFirst({ where: { number } });
     if (existingOrder) {
       return res.status(400).json({
         success: false,
@@ -457,24 +430,17 @@ export const create = async (req: RequestWithUser, res: Response) => {
       });
     }
 
-    // Validar items
-    if (!items.every(item => 
-      item.description && 
-      item.quantity > 0 && 
-      item.unit && 
-      item.unitPrice > 0)) {
+    if (!items.every(item => item.description && item.quantity > 0 && item.unit && item.unitPrice > 0)) {
       return res.status(400).json({
         success: false,
-        message: 'Todos los campos de los items son requeridos y los valores deben ser mayores a 0'
+        message: 'Todos los campos de los items son requeridos y deben ser mayores a 0'
       });
     }
 
-    // Calcular monto total con IVA incluido
-    const subtotal = items.reduce((sum: number, item: any) => 
-      sum + (Number(item.quantity) * Number(item.unitPrice)), 0);
-    const totalAmount = subtotal * 1.1; // 10% IVA
+    // Lógica para no sumar IVA
+    const subtotal = items.reduce((sum: number, item) => sum + (item.quantity * item.unitPrice), 0);
+    const totalAmount = subtotal;
 
-    // Verificar saldo disponible
     const balance = await getBudgetItemBalance(budgetItemId);
     if (totalAmount > balance) {
       return res.status(400).json({
@@ -483,14 +449,9 @@ export const create = async (req: RequestWithUser, res: Response) => {
       });
     }
 
-    // Verificar que el proyecto y proveedor existan y estén activos
     const [project, provider] = await Promise.all([
-      prisma.project.findUnique({
-        where: { id: projectId }
-      }),
-      prisma.provider.findUnique({
-        where: { id: providerId }
-      })
+      prisma.project.findUnique({ where: { id: projectId } }),
+      prisma.provider.findUnique({ where: { id: providerId } })
     ]);
 
     if (!project || project.status !== 'ACTIVE') {
@@ -507,9 +468,10 @@ export const create = async (req: RequestWithUser, res: Response) => {
       });
     }
 
-    const order = await prisma.$transaction(async (prisma) => {
-      // Crear la orden
-      const order = await prisma.purchaseOrder.create({
+    const userId = req.user.id;
+
+    const order = await prisma.$transaction(async (prismaTx) => {
+      const createdOrder = await prismaTx.purchaseOrder.create({
         data: {
           number,
           providerId,
@@ -519,14 +481,14 @@ export const create = async (req: RequestWithUser, res: Response) => {
           totalAmount,
           status: 'PENDING',
           description,
-          creatorId: req.user.id,
+          creatorId: userId,
           items: {
-            create: items.map((item: OrderItem) => ({
+            create: items.map(item => ({
               description: item.description,
-              quantity: Number(item.quantity),
+              quantity: item.quantity,
               unit: item.unit,
-              unitPrice: Number(item.unitPrice),
-              total: Number(item.quantity) * Number(item.unitPrice)
+              unitPrice: item.unitPrice,
+              total: item.quantity * item.unitPrice
             }))
           }
         },
@@ -534,29 +496,22 @@ export const create = async (req: RequestWithUser, res: Response) => {
           provider: true,
           project: true,
           budgetItem: true,
-          creator: {
-            select: {
-              id: true,
-              name: true,
-              email: true
-            }
-          },
+          creator: { select: { id: true, name: true, email: true } },
           items: true
         }
       });
 
-      // Registrar transacción presupuestaria
-      await prisma.budgetTransaction.create({
+      await prismaTx.budgetTransaction.create({
         data: {
           budgetItemId,
           amount: totalAmount,
           type: 'DEBIT',
-          reference: order.number,
-          description: `Orden de Compra ${order.number}`
+          reference: createdOrder.number,
+          description: `Orden de Compra ${createdOrder.number}`
         }
       });
 
-      return order;
+      return createdOrder;
     });
 
     res.status(201).json({
@@ -565,17 +520,18 @@ export const create = async (req: RequestWithUser, res: Response) => {
       message: 'Orden de compra creada exitosamente'
     });
   } catch (error) {
-    console.error('Create purchase order error:', error);
+    const err = error as Error;
+    console.error('Create purchase order error:', err);
     res.status(500).json({
       success: false,
       message: 'Error al crear orden de compra',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
 
 // GET /api/purchase-orders/:id/pdf
-export const downloadPdf = async (req: RequestWithUser, res: Response) => {
+const downloadPdf = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
@@ -586,82 +542,259 @@ export const downloadPdf = async (req: RequestWithUser, res: Response) => {
         project: true,
         budgetItem: true,
         items: true,
-        creator: {
-          select: {
-            name: true
-          }
-        },
-        approvedBy: {
-          select: {
-            name: true
-          }
-        }
+        creator: { select: { name: true } },
+        approvedBy: { select: { name: true } }
       }
     });
 
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Orden de compra no encontrada'
-      });
+      return res.status(404).json({ success: false, message: 'Orden de compra no encontrada' });
     }
 
+    // Creamos el doc PDF y lo enviamos en la respuesta
     const doc = new PDFDocument();
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=OC-${order.number}.pdf`);
     doc.pipe(res);
 
-    generatePurchaseOrderPdf(doc, order);
+    // Llamamos a la función MEJORADA
+    generatePurchaseOrderPdfBetter(doc, order);
 
     doc.end();
   } catch (error) {
-    console.error('Download PDF error:', error);
+    const err = error as Error;
+    console.error('Download PDF error:', err);
     res.status(500).json({
       success: false,
       message: 'Error al generar PDF',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+};
+
+// GET /api/purchase-orders/next-number
+const getNextNumber = async (req: Request, res: Response) => {
+  try {
+    const year = new Date().getFullYear();
+
+    const lastOrder = await prisma.purchaseOrder.findFirst({
+      where: {
+        number: {
+          startsWith: `OC-${year}`
+        }
+      },
+      orderBy: {
+        number: 'desc'
+      }
+    });
+
+    let nextNumber;
+    if (lastOrder) {
+      const lastNum = parseInt(lastOrder.number.split('-')[2]);
+      nextNumber = `OC-${year}-${(lastNum + 1).toString().padStart(4, '0')}`;
+    } else {
+      nextNumber = `OC-${year}-0001`;
+    }
+
+    res.json({
+      success: true,
+      data: { number: nextNumber }
+    });
+  } catch (error) {
+    const err = error as Error;
+    console.error('Get next number error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Error al generar siguiente número',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+};
+
+// POST /api/purchase-orders/:id/approve
+const approve = async (req: Request, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado' });
+    }
+
+    const { id } = req.params;
+    const { comment } = req.body as ApprovalData;
+
+    const order = await prisma.purchaseOrder.findUnique({ where: { id } });
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Orden de compra no encontrada' });
+    }
+
+    if (order.status !== 'PENDING') {
+      return res.status(400).json({
+        success: false,
+        message: 'La orden no está pendiente de aprobación'
+      });
+    }
+
+    const userId = req.user.id; // user está definido en req.user
+
+    const approvedOrder = await prisma.$transaction(async (prismaTx) => {
+      const updatedOrder = await prismaTx.purchaseOrder.update({
+        where: { id },
+        data: {
+          status: 'APPROVED',
+          approvedById: userId,
+          approvedAt: new Date(),
+          approvalComment: comment?.trim() || null
+        },
+        include: {
+          provider: true,
+          project: true,
+          budgetItem: true,
+          creator: { select: { id: true, name: true, email: true } },
+          approvedBy: { select: { id: true, name: true, email: true } }
+        }
+      });
+
+      if (comment?.trim()) {
+        await prismaTx.purchaseOrderHistory.create({
+          data: {
+            orderId: id,
+            userId: userId,
+            action: 'APPROVED',
+            comment: comment.trim()
+          }
+        });
+      }
+
+      return updatedOrder;
+    });
+
+    res.json({
+      success: true,
+      data: approvedOrder,
+      message: 'Orden aprobada correctamente'
+    });
+  } catch (error) {
+    const err = error as Error;
+    console.error('Approve order error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Error al aprobar la orden',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+};
+
+// POST /api/purchase-orders/:id/reject
+const reject = async (req: Request, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado' });
+    }
+
+    const { id } = req.params;
+    const { comment } = req.body as RejectionData;
+
+    if (!comment?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'El motivo del rechazo es requerido'
+      });
+    }
+
+    const order = await prisma.purchaseOrder.findUnique({ where: { id } });
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Orden de compra no encontrada' });
+    }
+
+    if (order.status !== 'PENDING') {
+      return res.status(400).json({
+        success: false,
+        message: 'La orden no está pendiente de aprobación'
+      });
+    }
+
+    const userId = req.user.id;
+
+    const rejectedOrder = await prisma.$transaction(async (prismaTx) => {
+      const updatedOrder = await prismaTx.purchaseOrder.update({
+        where: { id },
+        data: {
+          status: 'REJECTED',
+          rejectedById: userId,
+          rejectedAt: new Date(),
+          rejectionComment: comment.trim()
+        },
+        include: {
+          provider: true,
+          project: true,
+          budgetItem: true,
+          creator: { select: { id: true, name: true, email: true } },
+          rejectedBy: { select: { id: true, name: true, email: true } }
+        }
+      });
+
+      await prismaTx.purchaseOrderHistory.create({
+        data: {
+          orderId: id,
+          userId: userId,
+          action: 'REJECTED',
+          comment: comment.trim()
+        }
+      });
+
+      return updatedOrder;
+    });
+
+    res.json({
+      success: true,
+      data: rejectedOrder,
+      message: 'Orden rechazada correctamente'
+    });
+  } catch (error) {
+    const err = error as Error;
+    console.error('Reject order error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Error al rechazar la orden',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
 
 // GET /api/purchase-orders/export
-export const exportToExcel = async (req: RequestWithUser, res: Response) => {
+const exportToExcel = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate, status } = req.query;
 
+    const where: any = {
+      ...(status && { status: String(status) }),
+      ...(fromDate && toDate && {
+        date: {
+          gte: new Date(String(fromDate)),
+          lte: new Date(String(toDate))
+        }
+      })
+    };
+
     const orders = await prisma.purchaseOrder.findMany({
-      where: {
-        ...(status && { status: String(status) }),
-        ...(fromDate && toDate && {
-          date: {
-            gte: new Date(String(fromDate)),
-            lte: new Date(String(toDate))
-          }
-        })
-      },
+      where,
       include: {
         provider: true,
         project: true,
         budgetItem: true,
         items: true,
         paymentRequests: {
-          where: {
-            status: 'FINANCIAL_APPROVED'
-          },
-          select: {
-            amount: true
-          }
+          where: { status: 'FINANCIAL_APPROVED' },
+          select: { amount: true }
         }
       },
-      orderBy: {
-        createdAt: 'desc'
-      }
+      orderBy: { createdAt: 'desc' }
     });
 
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Órdenes de Compra');
 
-    // Configurar columnas
     worksheet.columns = [
       { header: 'Número', key: 'number', width: 15 },
       { header: 'Fecha', key: 'date', width: 12 },
@@ -674,10 +807,8 @@ export const exportToExcel = async (req: RequestWithUser, res: Response) => {
       { header: 'Estado', key: 'status', width: 12 }
     ];
 
-    // Agregar datos
     orders.forEach(order => {
-      const paidAmount = order.paymentRequests.reduce((sum, pr) => 
-        sum + Number(pr.amount), 0);
+      const paidAmount = order.paymentRequests.reduce((sum, pr) => sum + Number(pr.amount), 0);
       const remainingAmount = Number(order.totalAmount) - paidAmount;
 
       worksheet.addRow({
@@ -693,12 +824,10 @@ export const exportToExcel = async (req: RequestWithUser, res: Response) => {
       });
     });
 
-    // Dar formato a las columnas numéricas
     ['totalAmount', 'paidAmount', 'remainingAmount'].forEach(col => {
       worksheet.getColumn(col).numFmt = '"$"#,##0.00';
     });
 
-    // Dar formato al encabezado
     worksheet.getRow(1).font = { bold: true };
     worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
 
@@ -708,220 +837,16 @@ export const exportToExcel = async (req: RequestWithUser, res: Response) => {
     await workbook.xlsx.write(res);
     res.end();
   } catch (error) {
-    console.error('Export to Excel error:', error);
+    const err = error as Error;
+    console.error('Export to Excel error:', err);
     res.status(500).json({
       success: false,
       message: 'Error al exportar a Excel',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
 
-// Función auxiliar para calcular saldo de partida
-const getBudgetItemBalance = async (budgetItemId: string): Promise<number> => {
-  try {
-    const budgetItem = await prisma.budgetItem.findUnique({
-      where: { id: budgetItemId },
-      include: {
-        transactions: true
-      }
-    });
-
-    if (!budgetItem) {
-      throw new Error('Partida presupuestaria no encontrada');
-    }
-
-    const balance = budgetItem.transactions.reduce((sum, trans) => {
-      return trans.type === 'CREDIT' 
-        ? sum + Number(trans.amount)
-        : sum - Number(trans.amount);
-    }, Number(budgetItem.amount));
-
-    return balance;
-  } catch (error) {
-    console.error('Error calculating budget balance:', error);
-    throw error;
-  }
-};
-
-// Función auxiliar para generar PDF
-const generatePurchaseOrderPdf = (doc: PDFKit.PDFDocument, order: any) => {
-  try {
-    // Configuración inicial
-    doc.font('Helvetica');
-    
-    // Encabezado
-    doc.fontSize(20)
-       .text('Orden de Compra', { align: 'center' });
-    doc.moveDown();
-    
-    // Información de la orden
-    doc.fontSize(12)
-       .text(`Número: ${order.number}`)
-       .text(`Fecha: ${order.date.toLocaleDateString()}`);
-    doc.moveDown();
-  
-    // Información del proveedor
-    doc.fontSize(14)
-       .text('Datos del Proveedor', { underline: true });
-    doc.fontSize(12)
-       .text(`Nombre: ${order.provider.name}`)
-       .text(`RUC: ${order.provider.ruc || 'N/A'}`)
-       .text(`Dirección: ${order.provider.address || 'N/A'}`)
-       .text(`Teléfono: ${order.provider.phone || 'N/A'}`);
-    doc.moveDown();
-  
-    // Información del proyecto
-    doc.fontSize(14)
-       .text('Proyecto', { underline: true });
-    doc.fontSize(12)
-       .text(`Nombre: ${order.project.name}`)
-       .text(`Partida: ${order.budgetItem.name}`);
-    doc.moveDown();
-  
-    // Descripción si existe
-    if (order.description) {
-      doc.fontSize(14)
-         .text('Descripción', { underline: true });
-      doc.fontSize(12)
-         .text(order.description);
-      doc.moveDown();
-    }
-  
-    // Tabla de items
-    doc.fontSize(14)
-       .text('Detalles', { underline: true });
-    doc.moveDown();
-  
-    // Configuración de la tabla
-    const tableTop = doc.y;
-    const itemX = 50;
-    const quantityX = 350;
-    const priceX = 400;
-    const totalX = 480;
-  
-    // Cabeceras de la tabla
-    doc.fontSize(11)
-       .text('Descripción', itemX, tableTop)
-       .text('Cant.', quantityX, tableTop)
-       .text('Precio', priceX, tableTop)
-       .text('Total', totalX, tableTop);
-  
-    doc.moveDown();
-  
-    // Línea separadora después de cabeceras
-    const lineY = doc.y;
-    doc.moveTo(itemX, lineY)
-       .lineTo(totalX + 60, lineY)
-       .stroke();
-  
-    doc.moveDown();
-  
-    // Items
-    let y = doc.y;
-    let subtotal = 0;
-  
-    order.items.forEach((item: any) => {
-      // Nueva página si es necesario
-      if (y > 700) {
-        doc.addPage();
-        y = 50;
-      }
-  
-      // Formatear números
-      const unitPrice = Number(item.unitPrice).toLocaleString('es-PY', {
-        style: 'currency',
-        currency: 'PYG'
-      });
-      const total = Number(item.total).toLocaleString('es-PY', {
-        style: 'currency',
-        currency: 'PYG'
-      });
-  
-      doc.fontSize(10)
-         .text(item.description, itemX, y, { width: 290 })
-         .text(item.quantity.toString(), quantityX, y)
-         .text(unitPrice, priceX, y)
-         .text(total, totalX, y);
-  
-      subtotal += Number(item.total);
-      y += 20;
-    });
-  
-    // Línea final de items
-    doc.moveTo(itemX, y)
-       .lineTo(totalX + 60, y)
-       .stroke();
-  
-    y += 20;
-  
-    // Totales
-    const iva = subtotal * 0.1;
-    const total = subtotal + iva;
-  
-    // Formatear totales
-    const subtotalFormatted = subtotal.toLocaleString('es-PY', {
-      style: 'currency',
-      currency: 'PYG'
-    });
-    const ivaFormatted = iva.toLocaleString('es-PY', {
-      style: 'currency',
-      currency: 'PYG'
-    });
-    const totalFormatted = total.toLocaleString('es-PY', {
-      style: 'currency',
-      currency: 'PYG'
-    });
-  
-    doc.fontSize(10)
-       .text('Subtotal:', 400, y)
-       .text(subtotalFormatted, totalX, y);
-    
-    y += 20;
-    doc.text('IVA (10%):', 400, y)
-       .text(ivaFormatted, totalX, y);
-    
-    y += 20;
-    doc.fontSize(12)
-       .text('Total:', 400, y, { bold: true })
-       .text(totalFormatted, totalX, y, { bold: true });
-  
-    // Pie de página
-    const bottomY = doc.page.height - 100;
-  
-    // Líneas para firmas
-    doc.moveTo(50, bottomY)
-       .lineTo(200, bottomY)
-       .stroke();
-    
-    doc.moveTo(350, bottomY)
-       .lineTo(500, bottomY)
-       .stroke();
-  
-    // Textos del pie de página
-    doc.fontSize(10)
-       .text('Elaborado por', 50, bottomY + 10)
-       .text(order.creator.name, 50, bottomY + 25);
-  
-    doc.text('Autorizado por', 350, bottomY + 10)
-       .text(order.approvedBy?.name || '_____________________', 350, bottomY + 25);
-  
-    // Número de página
-    const pageNumber = `Página ${doc.pageNumber}`;
-    doc.fontSize(8)
-       .text(
-         pageNumber,
-         doc.page.width - 100,
-         doc.page.height - 50,
-         { align: 'right' }
-       );
-  } catch (error) {
-    console.error('Error generating PDF:', error);
-    throw error;
-  }
-};
-
-// Exports
 export {
   getAll,
   getById,

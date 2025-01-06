@@ -6,22 +6,21 @@ export const register = async (req: Request, res: Response) => {
   try {
     const { email, password, name, roleId } = req.body;
 
-    const user = await AuthService.createUser({
-      email,
-      password,
-      name,
-      roleId
-    });
+    const user = await AuthService.createUser({ email, password, name, roleId });
+    if (!user.success) {
+      return res.status(400).json(user);
+    }
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      data: user
+      data: user.data
     });
   } catch (error) {
-    console.error('Register error:', error);
-    res.status(400).json({
+    const err = error as Error;
+    console.error('Register error:', err);
+    return res.status(400).json({
       success: false,
-      message: error instanceof Error ? error.message : 'Error al registrar usuario'
+      message: err.message
     });
   }
 };
@@ -31,17 +30,23 @@ export const login = async (req: Request, res: Response) => {
     const { email, password } = req.body;
 
     const result = await AuthService.login(email, password);
-    
+
     if (!result.success) {
-      return res.status(401).json(result);
+      // result podría contener "message" con la razón
+      return res.status(401).json({
+        success: false,
+        message: result.message || 'Authentication failed'
+      });
     }
 
-    res.json(result);
+    // Suponiendo que result contiene {success, token, data: AuthUser}
+    return res.json(result);
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({
+    const err = error as Error;
+    console.error('Login error:', err);
+    return res.status(500).json({
       success: false,
-      message: 'Error al iniciar sesión'
+      message: err.message
     });
   }
 };
@@ -50,22 +55,21 @@ export const createUser = async (req: Request, res: Response) => {
   try {
     const { name, email, password, roleId } = req.body;
 
-    const user = await AuthService.createUser({
-      name,
-      email,
-      password,
-      roleId
-    });
+    const result = await AuthService.createUser({ name, email, password, roleId });
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      data: user
+      data: result.data
     });
   } catch (error) {
-    console.error('Create user error:', error);
-    res.status(400).json({
+    const err = error as Error;
+    console.error('Create user error:', err);
+    return res.status(400).json({
       success: false,
-      message: error instanceof Error ? error.message : 'Error al crear usuario'
+      message: err.message
     });
   }
 };
@@ -82,18 +86,23 @@ export const getUsers = async (req: Request, res: Response) => {
       limit: limit ? parseInt(limit as string) : undefined
     });
 
-    res.json({
+    if (!result.success || !result.data) {
+      return res.status(400).json(result);
+    }
+
+    return res.json({
       success: true,
-      data: result.users,
-      total: result.total,
+      data: result.data.users,
+      total: result.data.total,
       page: page ? parseInt(page as string) : 1,
       limit: limit ? parseInt(limit as string) : 10
     });
   } catch (error) {
-    console.error('Get users error:', error);
-    res.status(500).json({
+    const err = error as Error;
+    console.error('Get users error:', err);
+    return res.status(500).json({
       success: false,
-      message: 'Error al obtener usuarios'
+      message: err.message
     });
   }
 };
@@ -101,24 +110,25 @@ export const getUsers = async (req: Request, res: Response) => {
 export const getUserById = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const user = await AuthService.getUserById(id);
+    const result = await AuthService.getUserById(id);
 
-    if (!user) {
+    if (!result.success || !result.data) {
       return res.status(404).json({
         success: false,
         message: 'Usuario no encontrado'
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
-      data: user
+      data: result.data
     });
   } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({
+    const err = error as Error;
+    console.error('Get user error:', err);
+    return res.status(500).json({
       success: false,
-      message: 'Error al obtener usuario'
+      message: err.message
     });
   }
 };
@@ -128,21 +138,21 @@ export const updateUser = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { name, email, roleId } = req.body;
 
-    const user = await AuthService.updateUser(id, {
-      name,
-      email,
-      roleId
-    });
+    const result = await AuthService.updateUser(id, { name, email, roleId });
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
 
-    res.json({
+    return res.json({
       success: true,
-      data: user
+      data: result.data
     });
   } catch (error) {
-    console.error('Update user error:', error);
-    res.status(400).json({
+    const err = error as Error;
+    console.error('Update user error:', err);
+    return res.status(400).json({
       success: false,
-      message: error instanceof Error ? error.message : 'Error al actualizar usuario'
+      message: err.message
     });
   }
 };
@@ -152,17 +162,18 @@ export const updatePassword = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { currentPassword, newPassword } = req.body;
 
-    await AuthService.updatePassword(id, currentPassword, newPassword);
+    const result = await AuthService.updatePassword(id, currentPassword, newPassword);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
 
-    res.json({
-      success: true,
-      message: 'Contraseña actualizada correctamente'
-    });
+    return res.json(result);
   } catch (error) {
-    console.error('Update password error:', error);
-    res.status(400).json({
+    const err = error as Error;
+    console.error('Update password error:', err);
+    return res.status(400).json({
       success: false,
-      message: error instanceof Error ? error.message : 'Error al actualizar contraseña'
+      message: err.message
     });
   }
 };
@@ -170,17 +181,22 @@ export const updatePassword = async (req: Request, res: Response) => {
 export const deactivateUser = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const user = await AuthService.deactivateUser(id);
+    const result = await AuthService.deactivateUser(id);
 
-    res.json({
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    return res.json({
       success: true,
-      data: user
+      data: result.data
     });
   } catch (error) {
-    console.error('Deactivate user error:', error);
-    res.status(500).json({
+    const err = error as Error;
+    console.error('Deactivate user error:', err);
+    return res.status(500).json({
       success: false,
-      message: 'Error al desactivar usuario'
+      message: err.message
     });
   }
 };
@@ -188,17 +204,22 @@ export const deactivateUser = async (req: Request, res: Response) => {
 export const activateUser = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const user = await AuthService.activateUser(id);
+    const result = await AuthService.activateUser(id);
 
-    res.json({
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    return res.json({
       success: true,
-      data: user
+      data: result.data
     });
   } catch (error) {
-    console.error('Activate user error:', error);
-    res.status(500).json({
+    const err = error as Error;
+    console.error('Activate user error:', err);
+    return res.status(500).json({
       success: false,
-      message: 'Error al activar usuario'
+      message: err.message
     });
   }
 };

@@ -10,12 +10,16 @@ import {
   getPendingRequests 
 } from '../controllers/payment-request.controller';
 
+// Importa tu config Multer
+import { upload } from '../config/multer';
+
 const router = Router();
 
 router.use(authMiddleware);
 
 // Rutas base
-router.post('/', createPaymentRequest);
+// CLAVE: usamos `upload.array('files')` en la ruta POST para que Multer procese el FormData
+router.post('/', upload.array('files'), createPaymentRequest);
 router.get('/', getPaymentRequests);
 
 // Rutas de pending - IMPORTANTE: estas rutas deben ir ANTES de la ruta /:id
